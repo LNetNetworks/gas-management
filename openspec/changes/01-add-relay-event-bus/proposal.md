@@ -7,7 +7,7 @@ consumirlo en vivo. El relayer en Node emite **una linea JSON por evento** con `
 alimenta el dashboard. Es la brecha 8 de `node_relayer/COMPARACION-GO-NODE.md`.
 
 Va primero porque es la base de las otras tres propuestas de esta serie: el dashboard
-(`add-relay-dashboard`) consume el bus, y el reordenamiento (`add-nonce-reordering`) es imposible
+(`03-add-relay-dashboard`) consume el bus, y el reordenamiento (`04-add-nonce-reordering`) es imposible
 de diagnosticar sin la traza de por que una metatx se retuvo. Corresponde a las fases **F0 y F1**
 de `docs/PLAN-reorden-dashboard.md`.
 
@@ -33,7 +33,7 @@ de `docs/PLAN-reorden-dashboard.md`.
   (`code`).
 - **Emision de los eventos que el camino actual ya puede producir**: `relay.received`,
   `relay.decoded`, `relay.sent` y `relay.rejected`. `relay.held` / `relay.turn` los emite
-  `add-nonce-reordering` y `relay.settled` el watcher de receipts de esa misma propuesta.
+  `04-add-nonce-reordering` y `relay.settled` el watcher de receipts de esa misma propuesta.
 
 No hay cambios de comportamiento observables: el contrato JSON-RPC de `POST /` queda intacto.
 
@@ -59,5 +59,5 @@ No hay cambios de comportamiento observables: el contrato JSON-RPC de `POST /` q
 - **APIs**: ninguna. No se agregan rutas ni cambia ninguna respuesta.
 - **Operacion**: un archivo/stream de log adicional. El log de texto que hoy se parsea no cambia.
 - **Dependencias**: ninguna nueva; ring buffer y JSON con la libreria estandar.
-- **Aguas abajo**: habilita `add-relay-dashboard` y `add-nonce-reordering`. Congelar el contrato
+- **Aguas abajo**: habilita `03-add-relay-dashboard` y `04-add-nonce-reordering`. Congelar el contrato
   de eventos aqui es lo que permite portar el frontend de Node sin modificarlo.

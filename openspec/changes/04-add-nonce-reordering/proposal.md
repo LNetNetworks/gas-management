@@ -86,5 +86,5 @@ la clave del writer node.
   diferencias que esta serie elimina.
 - **Restriccion heredada**: `go-ethereum v1.9.15` (2020) limita lo disponible; no se actualiza en
   este cambio.
-- **Depende de**: `add-relay-event-bus`, `add-relay-http-endpoints` (la logica extraida a
-  `service/`) y `add-relay-dashboard` (para observar el reordenamiento durante la validacion).
+- **Depende de**: `01-add-relay-event-bus`, `02-add-relay-http-endpoints` (la logica extraida a
+  `service/`) y `03-add-relay-dashboard` (para observar el reordenamiento durante la validacion).

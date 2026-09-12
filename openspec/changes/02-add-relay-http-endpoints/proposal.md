@@ -20,7 +20,7 @@ Es la seccion 3 de `node_relayer/ENDPOINTS-GO-VS-NODE.md` y la fase **F2** de
   permissioning y los parametros de reorden. Campo a campo contra la respuesta de Node, salvo los
   que aqui no aplican.
 - **`GET /nonce/{address}`**: `{address, nonce, nonceHex, nextNonce, nextNonceHex, pending}`, con
-  `?peek=true` para consultar sin reservar. Mientras el tracker de `add-nonce-reordering` no
+  `?peek=true` para consultar sin reservar. Mientras el tracker de `04-add-nonce-reordering` no
   exista, `nextNonce` y `pending` se sirven de la cache `senders` actual y `pending` es 0 o 1;
   esa propuesta los vuelve autoritativos sin cambiar la forma de la respuesta.
 - **`POST /relay`**: acepta `{rawTx}` (y el alias `signedTransaction`), **espera** el receipt con
@@ -35,7 +35,7 @@ Es la seccion 3 de `node_relayer/ENDPOINTS-GO-VS-NODE.md` y la fase **F2** de
 
 Fuera de alcance de esta propuesta, aunque sean brechas reales contra Node: el passthrough crudo
 de los metodos no interceptados, los batches JSON-RPC, `eth_subscribe` sobre WebSocket de cara al
-cliente y las cabeceras CORS (estas ultimas llegan con `add-relay-dashboard`).
+cliente y las cabeceras CORS (estas ultimas llegan con `03-add-relay-dashboard`).
 
 ## Capabilities
 
@@ -64,5 +64,5 @@ cliente y las cabeceras CORS (estas ultimas llegan con `add-relay-dashboard`).
   exige tocar la plantilla de `besu-networks`, que va como PR aparte.
 - **Seguridad**: como el resto del servicio, sin autenticacion. `/info` expone direcciones y
   balance del writer node, y `POST /relay` consume su cupo de gas igual que el JSON-RPC.
-- **Depende de**: `add-relay-event-bus` (config y `reqId`). **Habilita**: el refactor a `service/`
-  es lo que le permite a `add-nonce-reordering` interponerse en un solo lugar.
+- **Depende de**: `01-add-relay-event-bus` (config y `reqId`). **Habilita**: el refactor a `service/`
+  es lo que le permite a `04-add-nonce-reordering` interponerse en un solo lugar.
