@@ -1,16 +1,21 @@
 ## Purpose
 
-Gobernar desde `config.toml` las capacidades nuevas del RelaySigner —reordenamiento de nonces y
-dashboard— con valores por defecto conservadores, de modo que una instalacion existente actualice
-el binario y siga comportandose exactamente igual hasta que un operador decida habilitarlas.
+Gobernar desde `config.toml` las capacidades nuevas del RelaySigner —reordenamiento de nonces,
+dashboard y log estructurado— con valores por defecto conservadores, de modo que una instalacion
+existente actualice el binario y siga comportandose exactamente igual hasta que un operador decida
+habilitarlas.
 
 ## ADDED Requirements
 
 ### Requirement: Bloques de configuracion para las capacidades nuevas
 
 El sistema SHALL reconocer en `config.toml` un bloque `[reorder]` con las claves `enabled`,
-`windowMs`, `maxInflightPerUser` y `receiptTimeoutMs`, y un bloque `[dashboard]` con las claves
-`enabled` y `bufferSize`.
+`windowMs`, `maxInflightPerUser` y `receiptTimeoutMs`; un bloque `[dashboard]` con las claves
+`enabled` y `bufferSize`; y un bloque `[log]` con las claves `level` y `rawTx`.
+
+`log.level` acepta `debug`, `info`, `warn` o `error`, y determina el nivel minimo que se escribe en
+la salida. `log.rawTx` habilita el volcado de la transaccion firmada completa descrito por
+`relay-structured-logging`.
 
 Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 
@@ -22,10 +27,13 @@ Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 | `reorder.receiptTimeoutMs` | `60000` |
 | `dashboard.enabled` | `false` |
 | `dashboard.bufferSize` | `500` |
+| `log.level` | `info` |
+| `log.rawTx` | `false` |
 
 #### Scenario: Los bloques estan ausentes
 
-- **WHEN** el servicio arranca con un `config.toml` que no contiene `[reorder]` ni `[dashboard]`
+- **WHEN** el servicio arranca con un `config.toml` que no contiene `[reorder]`, `[dashboard]` ni
+  `[log]`
 - **THEN** el servicio arranca sin error
 - **AND** cada parametro toma su valor por defecto
 - **AND** ambas capacidades quedan deshabilitadas
@@ -67,6 +75,13 @@ el arranque.
 
 - **WHEN** `config.toml` declara `dashboard.bufferSize = "muchos"`
 - **THEN** el sistema usa el valor por defecto `500`
+- **AND** el servicio arranca normalmente
+
+#### Scenario: Un nivel de log no reconocido
+
+- **WHEN** `config.toml` declara `log.level = "verboso"`
+- **THEN** el sistema usa el valor por defecto `info`
+- **AND** registra que la clave fue descartada por invalida
 - **AND** el servicio arranca normalmente
 
 ### Requirement: Con las capacidades apagadas el comportamiento no cambia

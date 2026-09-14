@@ -14,9 +14,11 @@ de `docs/PLAN-reorden-dashboard.md`.
 ## What Changes
 
 - **Bloques de configuracion nuevos** en `model/Config.go` y `config.toml`: `[reorder]`
-  (`enabled`, `windowMs`, `maxInflightPerUser`, `receiptTimeoutMs`) y `[dashboard]` (`enabled`,
-  `bufferSize`), todos con defaults conservadores y ambos `enabled = false`. Un `config.toml`
-  existente, sin esas claves, sigue arrancando igual.
+  (`enabled`, `windowMs`, `maxInflightPerUser`, `receiptTimeoutMs`), `[dashboard]` (`enabled`,
+  `bufferSize`) y `[log]` (`level`, `rawTx`), todos con defaults conservadores y ambos `enabled`
+  en `false`. El bloque `[log]` es el equivalente de las variables `LOG_LEVEL` y `LOG_RAW_TX` de
+  Node, que aqui viven en `config.toml` para no introducir variables de entorno donde el resto del
+  servicio no las usa. Un `config.toml` existente, sin esas claves, sigue arrancando igual.
 - **Emisor de log estructurado** en `audit/`: una linea JSON por evento con `event`, `ts`,
   `level`, `instanceId`, `reqId` y los campos propios del evento, hacia la salida estandar
   (`warn` y `error` por la de error, para que journald los clasifique). Va **en paralelo** al log
@@ -52,9 +54,9 @@ No hay cambios de comportamiento observables: el contrato JSON-RPC de `POST /` q
 ## Capabilities
 
 ### New Capabilities
-- `relay-runtime-configuration`: como se cargan y validan los bloques `[reorder]` y `[dashboard]`,
-  sus defaults, y la garantia de que un `config.toml` sin esas claves arranca con el
-  comportamiento actual.
+- `relay-runtime-configuration`: como se cargan y validan los bloques `[reorder]`, `[dashboard]` y
+  `[log]`, sus defaults, el descarte de un valor invalido, y la garantia de que un `config.toml`
+  sin esas claves arranca con el comportamiento actual.
 - `relay-structured-logging`: formato de la linea JSON por evento, campos obligatorios, y la
   convivencia con el log de texto existente.
 - `relay-event-stream`: el bus en memoria (ring buffer, `seq`, suscripcion, replay) y el
