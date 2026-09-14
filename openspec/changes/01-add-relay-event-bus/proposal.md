@@ -18,18 +18,30 @@ de `docs/PLAN-reorden-dashboard.md`.
   `bufferSize`), todos con defaults conservadores y ambos `enabled = false`. Un `config.toml`
   existente, sin esas claves, sigue arrancando igual.
 - **Emisor de log estructurado** en `audit/`: una linea JSON por evento con `event`, `ts`,
-  `level`, `reqId` y los campos propios del evento. Va **en paralelo** al log de texto actual, que
-  no se toca porque hay operadores que lo parsean.
+  `level`, `instanceId`, `reqId` y los campos propios del evento, hacia la salida estandar
+  (`warn` y `error` por la de error, para que journald los clasifique). Va **en paralelo** al log
+  de texto actual, que no se toca porque hay operadores que lo parsean.
 - **`reqId` por request HTTP**, generado en el handler y propagado por `context.Context` — el
-  equivalente del `AsyncLocalStorage` de Node.
+  equivalente del `AsyncLocalStorage` de Node —, mas un **`metaTxId` por metatx** e
+  **`instanceId` por proceso**. El `metaTxId` es obligatorio: la pagina indexa cada metatx por
+  ese campo y descarta el evento que no lo trae. El `instanceId` es lo que permite ver en el log
+  si dos instancias atendieron a la vez, escenario que rompe la cadena de nonces.
 - **Bus de eventos en memoria** en `events/`: ring buffer de `dashboard.bufferSize` (default 500)
   con `seq` incremental, `Subscribe`/`Unsubscribe` y `Replay(afterSeq)`. Con
-  `dashboard.enabled = false`, `Publish` retorna sin costo.
+  `dashboard.enabled = false`, `Publish` retorna sin costo. El bus es un **derivado del log**, no
+  una instrumentacion aparte: el emisor estructurado publica en el bus, asi que no hay dos
+  verdades sobre lo que paso y agregar un evento al log lo agrega al dashboard. El nivel de log
+  regula la consola, no el bus: un evento por debajo del nivel configurado igual se publica.
 - **Contrato de eventos congelado**, identico al de Node, porque el frontend del dashboard se
-  porta tal cual y depende de los nombres y campos exactos: `relay.received`, `relay.decoded`,
-  `relay.held` (`nonce`, `expected`, `gap`, `windowMs`), `relay.turn` (`heldMs`, `reason`),
-  `relay.sent` (`transactionHash`, `hubNonce`, `writerNodeNonce`, `pendingForUser`),
-  `relay.settled` (`blockNumber`, `gasUsed`, `executed`, `errorCodeName`), `relay.rejected`
+  porta tal cual y depende de los nombres y campos exactos. Todo evento referido a una metatx
+  lleva `metaTxId` — la pagina descarta los que no lo traen—, ademas de los campos comunes
+  `ts`, `level`, `event`, `instanceId`, `reqId` y el `seq` del bus:
+  `relay.received` (`rawTxHash`, `rawTxBytes`), `relay.decoded` (`from`, `to`, `isDeploy`,
+  `nonce`, `userGasLimit`, `metaTxGasLimit`, `nodeAddress`, `expiration`, `expiresInSeconds`,
+  `dataBytes`, `selector`), `relay.held` (`nonce`, `expected`, `gap`, `windowMs`), `relay.turn`
+  (`heldMs`, `reason`), `relay.sent` (`transactionHash`, `hubNonce`, `writerNodeNonce`,
+  `metaTxGasLimit`, `simulated`, `simulatedErrorCodeName`, `pendingForUser`), `relay.settled`
+  (`blockNumber`, `gasUsed`, `executed`, `errorCodeName`, `deployedAddress`), `relay.rejected`
   (`code`).
 - **Emision de los eventos que el camino actual ya puede producir**: `relay.received`,
   `relay.decoded`, `relay.sent` y `relay.rejected`. `relay.held` / `relay.turn` los emite
