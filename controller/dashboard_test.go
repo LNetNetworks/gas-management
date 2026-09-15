@@ -1,10 +1,13 @@
 package controller
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -112,5 +115,57 @@ func TestExistingRoutesUnchangedByConditionalRegistration(t *testing.T) {
 		if code := get(t, mux, http.MethodGet, "/nonce/").Code; code != http.StatusBadRequest {
 			t.Errorf("con dashboard=%v, GET /nonce/ -> %d, se esperaba 400", enabled, code)
 		}
+	}
+}
+
+// TestRelayIsUnaffectedByObservers cubre la tarea 7.2: relayar con observadores conectados devuelve
+// la misma respuesta, y el tiempo no depende de cuantos haya.
+func TestRelayIsUnaffectedByObservers(t *testing.T) {
+	withBus(t)
+	node := mockNode(t, common.HexToAddress("0xff6d55d01fb12695ea00c071ad8af3ce44cf3a91"), hubRejectedReceipt)
+	defer node.Close()
+	controller := relayingController(t, node.URL)
+	controller.Config.Dashboard.Enabled = true
+	mux := http.NewServeMux()
+	controller.Routes(mux)
+
+	relay := func() (string, time.Duration) {
+		recorder := httptest.NewRecorder()
+		inicio := time.Now()
+		mux.ServeHTTP(recorder, rawTxRequest("0xdeadbee"))
+		return recorder.Body.String(), time.Since(inicio)
+	}
+
+	sinObservadores, tiempoSolo := relay()
+
+	// Se conectan observadores de verdad, cada uno leyendo el stream.
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	var cancelaciones []context.CancelFunc
+	for i := 0; i < 8; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelaciones = append(cancelaciones, cancel)
+		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/dashboard/stream", nil)
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("no se pudo conectar el observador %d: %v", i, err)
+		}
+		go func() { _, _ = io.Copy(io.Discard, response.Body); response.Body.Close() }()
+	}
+	defer func() {
+		for _, cancel := range cancelaciones {
+			cancel()
+		}
+	}()
+
+	conObservadores, tiempoAcompanado := relay()
+
+	if sinObservadores != conObservadores {
+		t.Errorf("la respuesta cambio con observadores conectados:\n  sin: %s\n  con: %s",
+			sinObservadores, conObservadores)
+	}
+	// El relay no espera a ningun observador: el tiempo no puede escalar con la cantidad.
+	if tiempoAcompanado > tiempoSolo+500*time.Millisecond {
+		t.Errorf("relayar tardo %v con observadores y %v sin ellos", tiempoAcompanado, tiempoSolo)
 	}
 }

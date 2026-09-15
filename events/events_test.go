@@ -320,7 +320,10 @@ func BenchmarkPublishEnabled(b *testing.B) {
 // Se publica desde otra goroutine MIENTRAS el observador se conecta, y se comprueba que la union de
 // lo retenido y lo recibido son exactamente todos los eventos, cada uno una sola vez.
 func TestReplayAndSubscribeLosesNothing(t *testing.T) {
-	const total = 400
+	// Menos eventos que el buffer por suscriptor: asi ninguno se puede perder por el descarte del
+	// cliente lento, que es comportamiento correcto del bus, y lo unico que este test puede
+	// detectar es la ventana entre reanudar y suscribirse.
+	const total = subscriberBuffer / 2
 
 	// Se repite: la ventana es estrecha y un solo intento podria no caer dentro de ella.
 	for intento := 0; intento < 20; intento++ {

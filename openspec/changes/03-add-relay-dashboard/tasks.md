@@ -22,7 +22,7 @@
   verificar comparando que el HTML, el CSS y el JavaScript son los mismos que los de la fuente
 - [x] 3.2 Embeber la pagina en el binario y servirla como HTML, y verificar con un test que se
   responde sin leer ningun archivo del sistema de archivos
-- [ ] 3.3 Verificar que el binario compilado sirve la pagina desde un directorio vacio, para
+- [x] 3.3 Verificar que el binario compilado sirve la pagina desde un directorio vacio, para
   comprobar que no depende de archivos al lado del ejecutable
 
 ## 4. Stream de eventos
@@ -54,27 +54,27 @@
 
 ## 6. Intercambio entre origenes
 
-- [ ] 6.1 Aplicar las cabeceras como una envoltura sobre el ruteo y no dentro de cada manejador,
+- [x] 6.1 Aplicar las cabeceras como una envoltura sobre el ruteo y no dentro de cada manejador,
   segun D6, y verificar con un test que alcanzan a todas las rutas incluida una agregada despues
-- [ ] 6.2 No emitir ninguna cabecera mientras no haya origenes configurados, y verificar con un test
+- [x] 6.2 No emitir ninguna cabecera mientras no haya origenes configurados, y verificar con un test
   que la respuesta es identica a la de antes de esta capacidad
-- [ ] 6.3 Autorizar unicamente a los origenes configurados, y verificar con tests que un origen
+- [x] 6.3 Autorizar unicamente a los origenes configurados, y verificar con tests que un origen
   configurado recibe la autorizacion con los metodos y cabeceras aceptados, y que uno no configurado
   no la recibe pero su peticion se procesa igual
-- [ ] 6.4 Responder la consulta previa del navegador en la envoltura sin llegar al manejador, y
+- [x] 6.4 Responder la consulta previa del navegador en la envoltura sin llegar al manejador, y
   verificar con un test que una consulta previa sobre el relay no relaya ninguna metatx
-- [ ] 6.5 Verificar con un test que el cuerpo y el codigo de las respuestas existentes no cambian al
+- [x] 6.5 Verificar con un test que el cuerpo y el codigo de las respuestas existentes no cambian al
   configurar origenes
 
 ## 7. Verificacion de cierre
 
-- [ ] 7.1 Correr `go test ./... -race` y verificar que pasa, con atencion a la conexion y
+- [x] 7.1 Correr `go test ./... -race` y verificar que pasa, con atencion a la conexion y
   desconexion concurrente de observadores
-- [ ] 7.2 Verificar que relayar una metatx con varios observadores conectados devuelve la misma
+- [x] 7.2 Verificar que relayar una metatx con varios observadores conectados devuelve la misma
   respuesta y en un tiempo que no depende de cuantos haya
-- [ ] 7.3 Verificar contra el binario anterior que las respuestas de `POST /` y de las rutas ya
+- [x] 7.3 Verificar contra el binario anterior que las respuestas de `POST /` y de las rutas ya
   existentes son identicas, con el dashboard apagado y con el dashboard encendido
 - [ ] 7.4 Abrir el monitor contra el servicio en ejecucion, lanzar una rafaga de metatx y verificar
   que la pagina pinta cada una con su estado, sin huecos y sin errores en la consola del navegador
-- [ ] 7.5 Verificar que el servicio arranca con el `config.toml` de una instalacion previa y que el
+- [x] 7.5 Verificar que el servicio arranca con el `config.toml` de una instalacion previa y que el
   monitor queda apagado sin necesidad de configurar nada

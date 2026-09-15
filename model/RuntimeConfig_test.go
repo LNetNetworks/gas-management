@@ -40,7 +40,7 @@ permissionsEnabled = false
 func TestRuntimeBlocksAbsentUseDefaults(t *testing.T) {
 	v := viperFor(t, configExistente)
 
-	reorder, dashboard, logCfg, discarded := LoadRuntimeBlocks(v)
+	reorder, dashboard, logCfg, _, discarded := LoadRuntimeBlocks(v)
 
 	if len(discarded) != 0 {
 		t.Errorf("un config.toml sin los bloques nuevos no debe descartar ninguna clave, se descartaron %v", discarded)
@@ -83,7 +83,7 @@ windowMs = 5000
 bufferSize = 200
 `)
 
-	reorder, dashboard, _, discarded := LoadRuntimeBlocks(v)
+	reorder, dashboard, _, _, discarded := LoadRuntimeBlocks(v)
 
 	if len(discarded) != 0 {
 		t.Errorf("no se esperaba ninguna clave descartada, se descartaron %v", discarded)
@@ -126,7 +126,7 @@ windowMs = "pronto"
 		t.Errorf("el resto de la configuracion debe cargar igual, nodeURL = %q", config.Application.NodeURL)
 	}
 
-	reorder, dashboard, _, discarded := LoadRuntimeBlocks(v)
+	reorder, dashboard, _, _, discarded := LoadRuntimeBlocks(v)
 	if len(discarded) != 3 {
 		t.Errorf("se esperaban 3 claves descartadas, se descartaron %d: %v", len(discarded), discarded)
 	}
@@ -146,7 +146,7 @@ bufferSize = "muchos"
 level = "verboso"
 `)
 
-	_, dashboard, logCfg, discarded := LoadRuntimeBlocks(v)
+	_, dashboard, logCfg, _, discarded := LoadRuntimeBlocks(v)
 
 	if dashboard.BufferSize != 500 {
 		t.Errorf("dashboard.bufferSize = %d, se esperaba el default 500", dashboard.BufferSize)
@@ -171,7 +171,7 @@ windowMs = -1
 maxInflightPerUser = 0
 `)
 
-	reorder, _, _, discarded := LoadRuntimeBlocks(v)
+	reorder, _, _, _, discarded := LoadRuntimeBlocks(v)
 
 	if reorder.WindowMs != 3000 {
 		t.Errorf("reorder.windowMs = %d, se esperaba el default 3000", reorder.WindowMs)
@@ -191,7 +191,7 @@ func TestBufferSizeZeroIsAnExplicitChoice(t *testing.T) {
 [dashboard]
 enabled = true
 `)
-	_, dashboard, _, discarded := LoadRuntimeBlocks(ausente)
+	_, dashboard, _, _, discarded := LoadRuntimeBlocks(ausente)
 	if dashboard.BufferSize != 500 {
 		t.Errorf("con bufferSize ausente se esperaba 500, quedo %d", dashboard.BufferSize)
 	}
@@ -204,7 +204,7 @@ enabled = true
 enabled = true
 bufferSize = 0
 `)
-	_, dashboard, _, discarded = LoadRuntimeBlocks(cero)
+	_, dashboard, _, _, discarded = LoadRuntimeBlocks(cero)
 	if dashboard.BufferSize != 0 {
 		t.Errorf("un 0 explicito deja el bus sin capacidad, quedo %d", dashboard.BufferSize)
 	}

@@ -312,7 +312,7 @@ func TestInfoReportsWhatTheServiceUsesNotTheFile(t *testing.T) {
 	if err := v.ReadInConfig(); err != nil {
 		t.Fatalf("no se pudo leer el config de prueba: %v", err)
 	}
-	reorder, dashboard, logCfg, discarded := model.LoadRuntimeBlocks(v)
+	reorder, dashboard, logCfg, _, discarded := model.LoadRuntimeBlocks(v)
 	if len(discarded) == 0 {
 		t.Fatal("se esperaba que la clave invalida se descartara")
 	}

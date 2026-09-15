@@ -79,7 +79,7 @@ func getConfigFromFile() *model.Config {
 	// Los bloques [reorder], [dashboard] y [log] se leen aparte, clave por clave: un valor
 	// invalido en cualquiera de ellos cae a su default y se registra, pero no aborta el arranque.
 	var discarded []model.DiscardedKey
-	c.Reorder, c.Dashboard, c.Log, discarded = model.LoadRuntimeBlocks(v)
+	c.Reorder, c.Dashboard, c.Log, c.CORS, discarded = model.LoadRuntimeBlocks(v)
 	for _, key := range discarded {
 		log.GeneralLogger.Printf("config: se descarto %s = %v (%s), se usa el valor por defecto",
 			key.Key, key.Value, key.Reason)
@@ -90,12 +90,11 @@ func getConfigFromFile() *model.Config {
 
 func setupRoutes(port string) {
 	log.GeneralLogger.Println("Init RelaySigner")
-	mux := http.NewServeMux()
-	relayController.Routes(mux)
+	handler := relayController.Handler()
 	// http.Server con timeouts explícitos (evita Slowloris/DoS — gosec G114).
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      120 * time.Second,
