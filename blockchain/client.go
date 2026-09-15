@@ -350,3 +350,30 @@ func (ec *Client) AccountPermitted(contractAddress, senderAddress common.Address
 
 	return isPermitted, nil
 }
+
+// ChainID es el identificador de la cadena a la que esta conectado el nodo.
+//
+// Lo necesita `GET /info` para que un integrador confirme contra que red esta firmando, que es la
+// causa habitual de una metatx que revierte sin explicacion.
+func (ec *Client) ChainID(ctx context.Context) (*big.Int, error) {
+	chainID, err := ec.client.ChainID(ctx)
+	if err != nil {
+		err = errors.CallBlockchainFailed.Wrapf(err, "can't get chain id", -32603)
+		return nil, err
+	}
+	return chainID, nil
+}
+
+// BalanceOf es el balance de una cuenta, en wei.
+//
+// Es el balance de la cuenta del nodo lo que interesa: si se queda sin fondos, deja de poder
+// difundir las transacciones envolventes y ninguna metatx llega a la cadena.
+func (ec *Client) BalanceOf(ctx context.Context, address common.Address) (*big.Int, error) {
+	balance, err := ec.client.BalanceAt(ctx, address, nil)
+	if err != nil {
+		msg := fmt.Sprintf("can't get balance for %s", address.Hex())
+		err = errors.CallBlockchainFailed.Wrapf(err, msg, -32603)
+		return nil, err
+	}
+	return balance, nil
+}

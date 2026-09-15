@@ -91,7 +91,7 @@ func getConfigFromFile() *model.Config {
 func setupRoutes(port string) {
 	log.GeneralLogger.Println("Init RelaySigner")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", relayController.SignTransaction)
+	relayController.Routes(mux)
 	// http.Server con timeouts explícitos (evita Slowloris/DoS — gosec G114).
 	server := &http.Server{
 		Addr:              ":" + port,

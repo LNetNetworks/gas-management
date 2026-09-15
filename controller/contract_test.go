@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -44,9 +45,21 @@ var deferredEvents = map[string]bool{
 	"relay.settled": true, "relay.settle_failed": true,
 }
 
+// mockNodeOptions son las variantes del nodo simulado que hacen falta para probar los rechazos.
+type mockNodeOptions struct {
+	// senderNotPermitted hace que el contrato de reglas responda que el sender no esta permitido.
+	senderNotPermitted bool
+	// tinyGasLimit deja el cupo del nodo por debajo de lo que pide cualquier metatx.
+	tinyGasLimit bool
+}
+
 // mockNode responde las llamadas RPC que hace el camino de relay completo.
-func mockNode(t *testing.T, relayHub common.Address, receipt string) *httptest.Server {
+func mockNode(t *testing.T, relayHub common.Address, receipt string, options ...mockNodeOptions) *httptest.Server {
 	t.Helper()
+	var opts mockNodeOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
 	abiWord := func(hexValue string) string {
 		return "0x" + strings.Repeat("0", 64-len(hexValue)) + hexValue
 	}
@@ -67,10 +80,11 @@ func mockNode(t *testing.T, relayHub common.Address, receipt string) *httptest.S
 		// La resolucion de la direccion del RelayHub contra el proxy.
 		case strings.Contains(request, service.DATA_CALL_RELAYHUB):
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1000","result":"` + relayHubWord + `"}`))
-		// Cualquier otro eth_call del camino es el cupo de gas del nodo: generoso, para que la
-		// metatx pase la verificacion y llegue al envio.
+		// Un nodo real distingue cada eth_call por el selector de su metodo, y responder lo mismo
+		// a todos produce valores que el decodificador rechaza -un booleano tiene que ser 0 o 1- o
+		// que no tienen sentido -un nonce de mil millones-.
 		case strings.Contains(request, `"eth_call"`):
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + abiWord("3b9aca00") + `"}`))
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + ethCallResult(request, opts) + `"}`))
 		case strings.Contains(request, `"eth_getTransactionCount"`):
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x6"}`))
 		case strings.Contains(request, `"eth_sendRawTransaction"`):
@@ -87,6 +101,42 @@ func mockNode(t *testing.T, relayHub common.Address, receipt string) *httptest.S
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":null}`))
 		}
 	}))
+}
+
+// Selectores de los metodos que consulta el camino de relay.
+const (
+	selectorGetNonce         = "2d0335ab"
+	selectorCurrentGasLimit  = "d65cd010"
+	selectorNodeGasLimit     = "dfa47470"
+	selectorAccountPermitted = "0f68f0b3"
+)
+
+// nonceOnChain es el nonce que el hub simulado informa para cualquier usuario.
+const nonceOnChain = 345
+
+// ethCallResult responde cada consulta segun su selector, como haria un nodo real.
+func ethCallResult(request string, opts mockNodeOptions) string {
+	abiWord := func(hexValue string) string {
+		return "0x" + strings.Repeat("0", 64-len(hexValue)) + hexValue
+	}
+	switch {
+	case strings.Contains(request, selectorGetNonce):
+		return abiWord(strconv.FormatInt(nonceOnChain, 16))
+	case strings.Contains(request, selectorAccountPermitted):
+		// Un booleano ABI tiene que ser exactamente 0 o 1: cualquier otro valor lo rechaza el
+		// decodificador y el campo termina sin valor.
+		if opts.senderNotPermitted {
+			return abiWord("0")
+		}
+		return abiWord("1")
+	case strings.Contains(request, selectorCurrentGasLimit), strings.Contains(request, selectorNodeGasLimit):
+		if opts.tinyGasLimit {
+			return abiWord("1")
+		}
+		// Cupo generoso, para que la metatx pase la verificacion y llegue al envio.
+		return abiWord("3b9aca00")
+	}
+	return abiWord("3b9aca00")
 }
 
 // relayedTxHash es el hash con el que responde el nodo simulado al difundir la metatx, y por el que

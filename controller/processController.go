@@ -2,22 +2,18 @@ package controller
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	log "github.com/LACNetNetworks/gas-relay-signer/audit"
-	"github.com/LACNetNetworks/gas-relay-signer/model"
 	"github.com/LACNetNetworks/gas-relay-signer/rpc"
 	"github.com/LACNetNetworks/gas-relay-signer/service"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const PENDING = "PENDING"
@@ -158,7 +154,7 @@ func rejectMetaTx(ctx context.Context, id json.RawMessage, w http.ResponseWriter
 func processRawTransaction(ctx context.Context, relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
 	// El metaTxId se genera al entrar al camino de relay, no en el handler: una peticion puede
 	// traer mas de una metatx, y sin un id propio por metatx no habria forma de saber cual
-	// relay.sent corresponde a cual relay.received. Ver design.md, D8.
+	// relay.sent corresponde a cual relay.received. Ver design.md de 01, D8.
 	ctx = log.WithMetaTxID(ctx, log.NewMetaTxID())
 
 	log.GeneralLogger.Println("Is a rawTransaction")
@@ -168,125 +164,51 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
-
-	// relay.received se emite ANTES de decodificar, para que una raw tx malformada deje rastro
-	// con su metaTxId en lugar de desaparecer. Ver design.md, D8.
-	if len(params) > 0 {
-		received := map[string]interface{}{
-			// Sin valor, y no cadena vacia, cuando la raw tx no es hexadecimal: es el mismo
-			// criterio que el resto de los campos que no tienen valor aplicable.
-			"rawTxHash":  nil,
-			"rawTxBytes": service.RawTxBytes(params[0]),
-		}
-		if hash := service.RawTxHash(params[0]); hash != "" {
-			received["rawTxHash"] = hash
-		}
-		if log.ShouldLogRawTx() {
-			received["rawTx"] = params[0]
-		}
-		log.Info(ctx, "relay.received", received)
+	if len(params) == 0 {
+		rejectMetaTx(ctx, rpcMessage.ID, w, errors.New("invalid params: expected [rawTx]"))
+		return
 	}
 
-	decodeTransaction, err := service.GetTransaction(params[0][2:])
+	// Decodificar y validar es lo mismo para las dos puertas: lo comparte `POST /relay`, asi que no
+	// puede haber dos criterios sobre que metatx es aceptable. Ver design.md, D4.
+	prepared, err := relaySignerService.PrepareMetaTx(ctx, params[0])
 	if err != nil {
 		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
-	v, rInt, sInt := decodeTransaction.RawSignatureValues()
-	if (v == nil) || (rInt == nil) || (sInt == nil) {
-		err := errors.New("bad signature ECDSA")
-		rejectMetaTx(ctx, rpcMessage.ID, w, err)
-		return
-	}
+	logMetaTx(prepared)
 
-	// El RelayHub espera una firma pre-EIP155 (chainId=0 => v=27/28). Si el cliente
-	// firmó con EIP-155, el valor se truncaría (gosec G115) y la meta-tx revertiría
-	// on-chain. Lo rechazamos temprano con un mensaje claro.
-	if vUint := v.Uint64(); vUint != 27 && vUint != 28 {
-		err := errors.New("transaction must be signed pre-EIP155 (chainId=0, v=27 or 28)")
-		rejectMetaTx(ctx, rpcMessage.ID, w, err)
-		return
-	}
-
-	message, err := decodeTransaction.AsMessage(types.NewEIP155Signer(decodeTransaction.ChainId()))
+	// La reserva del cupo de gas y el envio son atomicos entre si, y el lock vive del lado del
+	// servicio: quien espere un receipt lo hace despues de soltarlo. Ver D3.
+	hash, err := relaySignerService.ReserveGasAndSend(ctx, prepared)
 	if err != nil {
 		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
-	var metaTxGasLimit uint64 = uint64((len(decodeTransaction.Data())*105)+300000) + decodeTransaction.Gas()
-
-	log.Info(ctx, "relay.decoded", decodedFields(decodeTransaction, message.From(), metaTxGasLimit))
-
-	if relaySignerService.Config.Security.PermissionsEnabled {
-		isSenderPermitted, err := relaySignerService.VerifySender(ctx, message.From(), rpcMessage.ID)
-		if err != nil {
-			data := handleError(ctx, rpcMessage.ID, err)
-			w.Write(data)
-			return
-		}
-		if !isSenderPermitted {
-			err := errors.New("account sender is not permitted to send transactions")
-			data := handleError(ctx, rpcMessage.ID, err)
-			w.Write(data)
-			return
-		}
-	}
-
-	lock.Lock()
-	defer lock.Unlock()
-	isCorrectGasLimit, err := relaySignerService.VerifyGasLimit(ctx, metaTxGasLimit, rpcMessage.ID)
-	if err != nil {
-		rejectMetaTx(ctx, rpcMessage.ID, w, err)
-		return
-	}
-	if !isCorrectGasLimit {
-		err := errors.New("transaction gas limit exceeds block gas limit")
-		rejectMetaTx(ctx, rpcMessage.ID, w, err)
-		return
-	}
-
-	log.GeneralLogger.Println("From:", message.From().Hex())
-	if decodeTransaction.To() != nil {
-		log.GeneralLogger.Println("To:", decodeTransaction.To().Hex())
-	}
-	log.GeneralLogger.Println("Data:", hexutil.Encode(decodeTransaction.Data()))
-	log.GeneralLogger.Println("GasLimit:", decodeTransaction.Gas())
-	log.GeneralLogger.Println("Nonce", decodeTransaction.Nonce())
-	log.GeneralLogger.Println("GasPrice:", decodeTransaction.GasPrice())
-	log.GeneralLogger.Println("Value:", decodeTransaction.Value())
-
-	var r [32]byte
-	var s [32]byte
-	rBytes, _ := hex.DecodeString(fmt.Sprintf("%064x", rInt))
-	sBytes, _ := hex.DecodeString(fmt.Sprintf("%064x", sInt))
-
-	copy(r[:], rBytes)
-	copy(s[:], sBytes)
-
-	var signingDataTx *model.RawTransaction
-
-	if decodeTransaction.To() != nil {
-		signingDataTx = model.NewTransaction(decodeTransaction.Nonce(), *decodeTransaction.To(), decodeTransaction.Value(), decodeTransaction.Gas(), decodeTransaction.GasPrice(), decodeTransaction.Data())
-	} else {
-		signingDataTx = model.NewContractCreation(decodeTransaction.Nonce(), decodeTransaction.Value(), decodeTransaction.Gas(), decodeTransaction.GasPrice(), decodeTransaction.Data())
-	}
-
-	signingDataRLP, err := rlp.EncodeToBytes(signingDataTx.Data)
-	if err != nil {
-		err := errors.New("internal error")
-		rejectMetaTx(ctx, rpcMessage.ID, w, err)
-		return
-	}
-
-	response := relaySignerService.SendMetatransaction(ctx, rpcMessage.ID, decodeTransaction.To(), metaTxGasLimit, signingDataRLP, uint8(v.Uint64()), r, s, message.From().Hex(), decodeTransaction.Nonce())
-	data, err := json.Marshal(response)
+	response := new(rpc.JsonrpcMessage)
+	response.ID = rpcMessage.ID
+	data, err := json.Marshal(response.Response(&hash))
 	if err != nil {
 		log.GeneralLogger.Println(err)
-		err := errors.New("internal error")
-		rejectMetaTx(ctx, rpcMessage.ID, w, err)
+		rejectMetaTx(ctx, rpcMessage.ID, w, errors.New("internal error"))
 		return
 	}
 	w.Write(data)
+}
+
+// logMetaTx conserva, tal cual, las entradas que el log de texto viene emitiendo por cada metatx.
+// Hay operadores que las parsean.
+func logMetaTx(prepared *service.PreparedMetaTx) {
+	tx := prepared.Transaction
+	log.GeneralLogger.Println("From:", prepared.From.Hex())
+	if tx.To() != nil {
+		log.GeneralLogger.Println("To:", tx.To().Hex())
+	}
+	log.GeneralLogger.Println("Data:", hexutil.Encode(tx.Data()))
+	log.GeneralLogger.Println("GasLimit:", tx.Gas())
+	log.GeneralLogger.Println("Nonce", tx.Nonce())
+	log.GeneralLogger.Println("GasPrice:", tx.GasPrice())
+	log.GeneralLogger.Println("Value:", tx.Value())
 }
