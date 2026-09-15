@@ -80,6 +80,16 @@ func Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// El servidor pone una fecha limite de escritura a toda respuesta, para que un cliente lento no
+	// retenga una conexion. Un flujo de eventos dura, a proposito, mucho mas que ese limite: sin
+	// quitarlo, el navegador ve la conexion cortada cada tantos minutos y deja un error en la
+	// consola en cada corte. Se quita SOLO en esta conexion; el resto de las respuestas lo
+	// conservan. Un ResponseWriter que no lo soporta -el de los tests- no es un fallo: el flujo
+	// funciona igual, solo queda sujeto al limite.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		log.Debug(ctx, "dashboard.stream_no_deadline", map[string]interface{}{"error": err.Error()})
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")

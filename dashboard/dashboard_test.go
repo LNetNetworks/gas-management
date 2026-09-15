@@ -415,3 +415,29 @@ func TestStreamReleasesItsSlot(t *testing.T) {
 		t.Errorf("quedaron %d observadores tras cerrarlos todos", events.SubscriberCount())
 	}
 }
+
+// TestStreamSurvivesTheServerWriteTimeout cubre la tarea 7.4: el servidor le pone una fecha limite
+// de escritura a toda respuesta, y un flujo de eventos dura mucho mas que eso. Sin quitar ese
+// limite en la conexion del flujo, el navegador la ve cortada cada tantos minutos y deja un error
+// en la consola en cada corte.
+func TestStreamSurvivesTheServerWriteTimeout(t *testing.T) {
+	withBus(t, 50)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dashboard/stream", Stream)
+	server := httptest.NewUnstartedServer(mux)
+	server.Config.WriteTimeout = 200 * time.Millisecond
+	server.Start()
+	t.Cleanup(server.Close)
+
+	client := openStream(t, server, "", nil)
+	waitFor(t, "llega el saludo", func() bool { return len(client.received()) >= 1 })
+
+	// Bien pasada la fecha limite, la misma conexion tiene que seguir entregando.
+	time.Sleep(500 * time.Millisecond)
+	events.Publish(line("relay.sent"))
+
+	waitFor(t, "el evento llega despues del WriteTimeout", func() bool {
+		return len(namesOf(client)) == 1
+	})
+}

@@ -74,7 +74,7 @@
   respuesta y en un tiempo que no depende de cuantos haya
 - [x] 7.3 Verificar contra el binario anterior que las respuestas de `POST /` y de las rutas ya
   existentes son identicas, con el dashboard apagado y con el dashboard encendido
-- [ ] 7.4 Abrir el monitor contra el servicio en ejecucion, lanzar una rafaga de metatx y verificar
+- [x] 7.4 Abrir el monitor contra el servicio en ejecucion, lanzar una rafaga de metatx y verificar
   que la pagina pinta cada una con su estado, sin huecos y sin errores en la consola del navegador
 - [x] 7.5 Verificar que el servicio arranca con el `config.toml` de una instalacion previa y que el
   monitor queda apagado sin necesidad de configurar nada
