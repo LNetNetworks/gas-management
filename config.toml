@@ -32,3 +32,8 @@ accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
 # [log]
 # level = "info"              # debug, info, warn o error: nivel minimo que se escribe en la salida
 # rawTx = false               # volcar la transaccion firmada completa (por defecto solo hash y tamano)
+
+# [cors]
+# Origenes que pueden llamar al servicio desde un navegador. Vacio -el default- no emite ninguna
+# cabecera, que es como se comporta el servicio desde siempre. "*" autoriza a cualquiera.
+# allowedOrigins = ["https://mi-dapp.example"]

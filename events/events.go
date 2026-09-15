@@ -133,7 +133,12 @@ func (bus *Bus) retain(event Event) {
 func (bus *Bus) Replay(afterSeq uint64) []Event {
 	bus.mutex.Lock()
 	defer bus.mutex.Unlock()
+	return bus.replayLocked(afterSeq)
+}
 
+// replayLocked es el recorrido del anillo, con el candado ya tomado. Lo comparten Replay y
+// ReplayAndSubscribe para que las dos devuelvan exactamente lo mismo.
+func (bus *Bus) replayLocked(afterSeq uint64) []Event {
 	out := make([]Event, 0, bus.size)
 	for offset := 0; offset < bus.size; offset++ {
 		event := bus.ring[(bus.start+offset)%bus.capacity]
@@ -150,9 +155,29 @@ func (bus *Bus) Replay(afterSeq uint64) []Event {
 // Cada suscriptor tiene su canal y su goroutine de entrega: ahi vive el I/O del observador, fuera
 // del camino de la metatx, y ahi se recupera cualquier panico suyo.
 func (bus *Bus) Subscribe(notify func(Event)) (cancel func()) {
+	_, cancel = bus.ReplayAndSubscribe(noReplay, notify)
+	return cancel
+}
+
+// noReplay pide suscribirse sin recibir nada de lo retenido.
+const noReplay = ^uint64(0)
+
+// ReplayAndSubscribe devuelve lo retenido posterior a afterSeq Y registra al observador, las dos
+// cosas bajo el MISMO candado.
+//
+// Hacerlo en dos pasos pierde eventos: entre un Replay y un Subscribe separados, otra goroutine
+// puede publicar, y ese evento no sale en lo retenido ni tiene todavia una suscripcion que lo
+// reciba. En Node eso no pasa porque el event loop no cede el control en el medio; aca hay que
+// garantizarlo. Ver design.md de 03-add-relay-dashboard, D1.
+//
+// El que solo quiere suscribirse pasa `noReplay` y recibe el historial vacio.
+func (bus *Bus) ReplayAndSubscribe(afterSeq uint64, notify func(Event)) (retained []Event, cancel func()) {
 	sub := &subscriber{channel: make(chan Event, subscriberBuffer)}
 
 	bus.mutex.Lock()
+	if afterSeq != noReplay {
+		retained = bus.replayLocked(afterSeq)
+	}
 	bus.nextID++
 	id := bus.nextID
 	bus.subscribers[id] = sub
@@ -161,7 +186,7 @@ func (bus *Bus) Subscribe(notify func(Event)) (cancel func()) {
 	go deliver(sub.channel, notify)
 
 	var once sync.Once
-	return func() {
+	return retained, func() {
 		once.Do(func() {
 			bus.mutex.Lock()
 			if registered, ok := bus.subscribers[id]; ok {
@@ -227,6 +252,14 @@ func Replay(afterSeq uint64) []Event { return Default().Replay(afterSeq) }
 
 // Subscribe se suscribe al bus del proceso.
 func Subscribe(notify func(Event)) (cancel func()) { return Default().Subscribe(notify) }
+
+// ReplayAndSubscribe reanuda y se suscribe al bus del proceso, sin ventana entre las dos cosas.
+func ReplayAndSubscribe(afterSeq uint64, notify func(Event)) ([]Event, func()) {
+	return Default().ReplayAndSubscribe(afterSeq, notify)
+}
+
+// SubscriberCount es cuantos observadores hay conectados al bus del proceso.
+func SubscriberCount() int { return Default().SubscriberCount() }
 
 // Enabled indica si el bus del proceso esta activo.
 func Enabled() bool { return Default().Enabled() }

@@ -311,3 +311,124 @@ func BenchmarkPublishEnabled(b *testing.B) {
 		bus.Publish(l)
 	}
 }
+
+// TestReplayAndSubscribeLosesNothing cubre la tarea 1.1, que es la razon de ser de D1: entre un
+// Replay y un Subscribe separados hay una ventana por la que un evento publicado en ese instante no
+// sale en lo retenido ni tiene todavia suscripcion que lo reciba. Hacer las dos cosas bajo el mismo
+// candado la cierra.
+//
+// Se publica desde otra goroutine MIENTRAS el observador se conecta, y se comprueba que la union de
+// lo retenido y lo recibido son exactamente todos los eventos, cada uno una sola vez.
+func TestReplayAndSubscribeLosesNothing(t *testing.T) {
+	// Menos eventos que el buffer por suscriptor: asi ninguno se puede perder por el descarte del
+	// cliente lento, que es comportamiento correcto del bus, y lo unico que este test puede
+	// detectar es la ventana entre reanudar y suscribirse.
+	const total = subscriberBuffer / 2
+
+	// Se repite: la ventana es estrecha y un solo intento podria no caer dentro de ella.
+	for intento := 0; intento < 20; intento++ {
+		bus := New(true, total*2)
+
+		publicando := make(chan struct{})
+		go func() {
+			close(publicando)
+			for i := 0; i < total; i++ {
+				bus.Publish(line("relay.received"))
+			}
+		}()
+		<-publicando
+
+		var mutex sync.Mutex
+		var recibidos []uint64
+		retenidos, cancel := bus.ReplayAndSubscribe(0, func(event Event) {
+			mutex.Lock()
+			recibidos = append(recibidos, event.Seq)
+			mutex.Unlock()
+		})
+
+		waitFor(t, "se publica todo y llega al observador", func() bool {
+			mutex.Lock()
+			defer mutex.Unlock()
+			return len(retenidos)+len(recibidos) >= total
+		})
+		cancel()
+
+		visto := make(map[uint64]int, total)
+		for _, event := range retenidos {
+			visto[event.Seq]++
+		}
+		mutex.Lock()
+		for _, seq := range recibidos {
+			visto[seq]++
+		}
+		mutex.Unlock()
+
+		for seq := uint64(1); seq <= total; seq++ {
+			switch visto[seq] {
+			case 1:
+			case 0:
+				t.Fatalf("intento %d: se perdio el evento %d entre lo retenido y el flujo", intento, seq)
+			default:
+				t.Fatalf("intento %d: el evento %d llego %d veces", intento, seq, visto[seq])
+			}
+		}
+	}
+}
+
+// TestSubscribeStillWorksOnItsOwn cubre la tarea 1.2: la suscripcion sin reanudacion no entrega
+// nada de lo retenido, como antes.
+func TestSubscribeStillWorksOnItsOwn(t *testing.T) {
+	bus := New(true, 10)
+	bus.Publish(line("relay.received"))
+	bus.Publish(line("relay.decoded"))
+
+	var mutex sync.Mutex
+	var recibidos []string
+	cancel := bus.Subscribe(func(event Event) {
+		mutex.Lock()
+		recibidos = append(recibidos, event.Name())
+		mutex.Unlock()
+	})
+	defer cancel()
+
+	// Lo publicado ANTES de suscribirse no llega por el flujo.
+	bus.Publish(line("relay.sent"))
+	waitFor(t, "llega lo publicado despues de suscribirse", func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return len(recibidos) == 1
+	})
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if recibidos[0] != "relay.sent" {
+		t.Errorf("se recibio %q, se esperaba solo lo publicado despues de suscribirse", recibidos[0])
+	}
+
+	// Y Replay por separado sigue devolviendo todo lo retenido.
+	if retenido := bus.Replay(0); len(retenido) != 3 {
+		t.Errorf("Replay devolvio %d eventos, se esperaban los 3 retenidos", len(retenido))
+	}
+}
+
+// TestReplayAndSubscribeHonoursTheStartingPoint: la reanudacion desde un seq entrega solo lo
+// posterior, igual que Replay.
+func TestReplayAndSubscribeHonoursTheStartingPoint(t *testing.T) {
+	bus := New(true, 10)
+	for i := 0; i < 5; i++ {
+		bus.Publish(line("relay.received"))
+	}
+
+	retenidos, cancel := bus.ReplayAndSubscribe(3, func(Event) {})
+	defer cancel()
+
+	if len(retenidos) != 2 {
+		t.Fatalf("se devolvieron %d eventos, se esperaban 2 (los posteriores al seq 3)", len(retenidos))
+	}
+	if retenidos[0].Seq != 4 || retenidos[1].Seq != 5 {
+		t.Errorf("se devolvieron los seq %d y %d, se esperaban 4 y 5", retenidos[0].Seq, retenidos[1].Seq)
+	}
+	if bus.SubscriberCount() != 1 {
+		t.Errorf("hay %d suscriptores, se esperaba 1: reanudar tambien suscribe", bus.SubscriberCount())
+	}
+}

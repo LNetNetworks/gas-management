@@ -49,6 +49,12 @@ func DefaultLogConfig() LogConfig {
 	return LogConfig{Level: DefaultLogLevel, RawTx: false}
 }
 
+// DefaultCorsConfig devuelve el bloque [cors] como si estuviera ausente: sin ningun origen, o sea
+// sin emitir cabeceras.
+func DefaultCorsConfig() CorsConfig {
+	return CorsConfig{AllowedOrigins: nil}
+}
+
 // LoadRuntimeBlocks lee [reorder], [dashboard] y [log] clave por clave, fuera del Unmarshal que
 // carga el resto de la configuracion.
 //
@@ -57,7 +63,7 @@ func DefaultLogConfig() LogConfig {
 // la que no sirve se reemplaza por su default y se devuelve en `discarded` para que el llamador la
 // registre. Tampoco se declaran defaults en el viper, porque eso haria que `IsSet` devuelva true
 // para una clave ausente y se perderia la unica forma de distinguirla de un valor explicito.
-func LoadRuntimeBlocks(v *viper.Viper) (ReorderConfig, DashboardConfig, LogConfig, []DiscardedKey) {
+func LoadRuntimeBlocks(v *viper.Viper) (ReorderConfig, DashboardConfig, LogConfig, CorsConfig, []DiscardedKey) {
 	var discarded []DiscardedKey
 
 	reorder := DefaultReorderConfig()
@@ -75,7 +81,34 @@ func LoadRuntimeBlocks(v *viper.Viper) (ReorderConfig, DashboardConfig, LogConfi
 	logCfg.Level = readLevel(v, "log.level", logCfg.Level, &discarded)
 	logCfg.RawTx = readBool(v, "log.rawTx", logCfg.RawTx, &discarded)
 
-	return reorder, dashboard, logCfg, discarded
+	cors := DefaultCorsConfig()
+	cors.AllowedOrigins = readOrigins(v, "cors.allowedOrigins", &discarded)
+
+	return reorder, dashboard, logCfg, cors, discarded
+}
+
+// readOrigins lee la lista de origenes permitidos. Una lista mal formada se descarta entera y deja
+// el servicio cerrado, que es el default: ante la duda, no se abre.
+func readOrigins(v *viper.Viper, key string, discarded *[]DiscardedKey) []string {
+	if !v.IsSet(key) {
+		return nil
+	}
+	raw := v.Get(key)
+	values, ok := raw.([]interface{})
+	if !ok {
+		*discarded = append(*discarded, DiscardedKey{Key: key, Value: raw, Reason: "no es una lista"})
+		return nil
+	}
+	origins := make([]string, 0, len(values))
+	for _, value := range values {
+		origin, ok := value.(string)
+		if !ok || strings.TrimSpace(origin) == "" {
+			*discarded = append(*discarded, DiscardedKey{Key: key, Value: raw, Reason: "contiene un origen que no es texto"})
+			return nil
+		}
+		origins = append(origins, strings.TrimSpace(origin))
+	}
+	return origins
 }
 
 func readBool(v *viper.Viper, key string, def bool, discarded *[]DiscardedKey) bool {

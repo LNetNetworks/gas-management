@@ -53,6 +53,13 @@ type LogConfig struct {
 	RawTx bool
 }
 
+// CorsConfig gobierna que origenes pueden llamar al servicio desde un navegador. Vacio -el
+// default- significa no emitir ninguna cabecera de intercambio entre origenes, que es como se
+// comporta el servicio desde siempre.
+type CorsConfig struct {
+	AllowedOrigins []string
+}
+
 // Config es la configuracion del servicio.
 //
 // Los tres bloques nuevos llevan `mapstructure:"-"` a proposito: NO se decodifican con el
@@ -67,4 +74,5 @@ type Config struct {
 	Reorder     ReorderConfig     `mapstructure:"-"`
 	Dashboard   DashboardConfig   `mapstructure:"-"`
 	Log         LogConfig         `mapstructure:"-"`
+	CORS        CorsConfig        `mapstructure:"-"`
 }
