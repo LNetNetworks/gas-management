@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	log "github.com/LACNetNetworks/gas-relay-signer/audit"
 	"github.com/LACNetNetworks/gas-relay-signer/model"
 	"github.com/LACNetNetworks/gas-relay-signer/rpc"
 	"github.com/LACNetNetworks/gas-relay-signer/service"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -103,6 +105,45 @@ func processGetMetaTxResult(ctx context.Context, relaySignerService *service.Rel
 	w.Write(data)
 }
 
+// decodedFields arma los campos de relay.decoded.
+//
+// Todo campo del contrato se emite siempre, incluso cuando no hay valor aplicable: la vista los
+// lee por nombre y omitirlos la dejaria sin poder distinguir "no se pudo" de "no se emitio".
+// Los cuatro que salen del sufijo del modelo de gas quedan sin valor si el sufijo no esta, y eso
+// NO rechaza la metatx: se decodifica para registrar, nunca para validar. Ver design.md, D13.
+func decodedFields(tx *types.Transaction, from common.Address, metaTxGasLimit uint64) map[string]interface{} {
+	fields := map[string]interface{}{
+		"from":             from.Hex(),
+		"to":               nil,
+		"isDeploy":         tx.To() == nil,
+		"nonce":            tx.Nonce(),
+		"userGasLimit":     tx.Gas(),
+		"metaTxGasLimit":   metaTxGasLimit,
+		"dataBytes":        len(tx.Data()),
+		"nodeAddress":      nil,
+		"expiration":       nil,
+		"expiresInSeconds": nil,
+		"selector":         nil,
+	}
+	if to := tx.To(); to != nil {
+		fields["to"] = to.Hex()
+	}
+
+	gasModel := service.DecodeGasModelSuffix(tx.Data())
+	if !gasModel.Decoded {
+		return fields
+	}
+	fields["nodeAddress"] = gasModel.NodeAddress
+	if gasModel.Selector != "" {
+		fields["selector"] = gasModel.Selector
+	}
+	if expiration, ok := gasModel.ExpirationSeconds(); ok {
+		fields["expiration"] = expiration
+		fields["expiresInSeconds"] = int64(expiration) - time.Now().Unix()
+	}
+	return fields
+}
+
 // rejectMetaTx registra el rechazo de una metatx y responde el error JSON-RPC.
 //
 // Es el unico punto por el que sale un rechazo del camino de relay: el evento y la respuesta se
@@ -169,6 +210,10 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 		return
 	}
 
+	var metaTxGasLimit uint64 = uint64((len(decodeTransaction.Data())*105)+300000) + decodeTransaction.Gas()
+
+	log.Info(ctx, "relay.decoded", decodedFields(decodeTransaction, message.From(), metaTxGasLimit))
+
 	if relaySignerService.Config.Security.PermissionsEnabled {
 		isSenderPermitted, err := relaySignerService.VerifySender(ctx, message.From(), rpcMessage.ID)
 		if err != nil {
@@ -183,8 +228,6 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 			return
 		}
 	}
-
-	var metaTxGasLimit uint64 = uint64((len(decodeTransaction.Data())*105)+300000) + decodeTransaction.Gas()
 
 	lock.Lock()
 	defer lock.Unlock()

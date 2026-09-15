@@ -54,6 +54,10 @@ type RelaySignerService struct {
 	Config      *model.Config
 	senders     map[string]*nonceEntry
 	sendersLock sync.Mutex
+	// metaTx recuerda, por hash de la transaccion enviada, a que metatx pertenece. Sin esto un
+	// receipt consultado en otra peticion no se podria asociar a la metatx que lo origino.
+	metaTx     map[common.Hash]*metaTxEntry
+	metaTxLock sync.Mutex
 }
 
 // Init configuration parameters
@@ -79,6 +83,7 @@ func (service *RelaySignerService) Init(_config *model.Config) error {
 	service.Config.Application.Key = string(key[2:66])
 
 	service.senders = make(map[string]*nonceEntry)
+	service.metaTx = make(map[common.Hash]*metaTxEntry)
 
 	if service.Config.Security.PermissionsEnabled {
 		if !(common.IsHexAddress(service.Config.Security.AccountContractAddress)) {
@@ -117,18 +122,45 @@ func (service *RelaySignerService) SendMetatransaction(ctx context.Context, id j
 		return HandleError(ctx, id, err)
 	}
 
-	log.GeneralLogger.Println("transaction", tx)
+	// La respuesta al cliente sigue siendo el hash y nada mas: el cliente recibe exactamente lo
+	// mismo que antes de que este metodo tuviera la transaccion entera a mano.
+	transactionHash := tx.Hash()
+
+	// Se recuerda a que metatx pertenece este hash: el receipt llega en otra peticion, donde no
+	// existe ningun metaTxId del que partir. Ver design.md, D11.
+	service.rememberMetaTx(ctx, transactionHash)
+
+	log.GeneralLogger.Println("transaction", &transactionHash)
 
 	service.incrementTransactionCount(sender, nonce)
+
+	log.Info(ctx, "relay.sent", map[string]interface{}{
+		"transactionHash": transactionHash.Hex(),
+		// El nonce del hub para este usuario, que es el que trae firmado la metatx.
+		"hubNonce": nonce,
+		// El nonce de la CUENTA del writer node: es el que traba el txpool si algo se pierde, y
+		// el unico dato con el que se puede desatascar la cola desde el nodo.
+		"writerNodeNonce": tx.Nonce(),
+		"metaTxGasLimit":  gasLimit,
+		// Campos del contrato que este servicio todavia no calcula. Se emiten sin valor en lugar
+		// de omitirse, para que la vista distinga "no aplica" de "no se emitio". Ver D13.
+		"simulated":              nil,
+		"simulatedErrorCodeName": nil,
+		"pendingForUser":         nil,
+	})
 
 	result := new(rpc.JsonrpcMessage)
 
 	result.ID = id
-	return result.Response(tx)
+	return result.Response(&transactionHash)
 }
 
 // GetTransactionReceipt from blockchain
 func (service *RelaySignerService) GetTransactionReceipt(ctx context.Context, id json.RawMessage, transactionID string) *rpc.JsonrpcMessage {
+	// Los eventos que salgan de aca pertenecen a la metatx que produjo este hash, no a la
+	// peticion que vino a consultar el receipt. Ver design.md, D11.
+	ctx = service.recallMetaTx(ctx, common.HexToHash(transactionID))
+
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
@@ -163,17 +195,17 @@ func (service *RelaySignerService) GetTransactionReceipt(ctx context.Context, id
 
 		var sawContractDeployed, sawTransactionRelayed, sawBadTransaction, sawRelayed bool
 
-		for _, log := range receipt.Logs {
-			if len(log.Topics) == 0 {
+		for _, lg := range receipt.Logs {
+			if len(lg.Topics) == 0 {
 				continue
 			}
-			switch log.Topics[0].Hex() {
+			switch lg.Topics[0].Hex() {
 			case "0x" + eventContractDeployed:
 				sawContractDeployed = true
-				receipt.ContractAddress = common.BytesToAddress(log.Data)
+				receipt.ContractAddress = common.BytesToAddress(lg.Data)
 			case "0x" + eventTransactionRelayed:
 				sawTransactionRelayed = true
-				executed, output := transactionRelayedFailed(ctx, id, log.Data)
+				executed, output := transactionRelayedFailed(ctx, id, lg.Data)
 				if !executed {
 					receipt.Status = uint64(0)
 					reason := decodeRevertReason(output)
@@ -188,10 +220,11 @@ func (service *RelaySignerService) GetTransactionReceipt(ctx context.Context, id
 				}
 			case "0x" + eventBadTransaction:
 				sawBadTransaction = true
-				errorCode, badSender := badTransactionErrorCode(ctx, id, log.Data)
+				errorCode, badSender := badTransactionErrorCode(ctx, id, lg.Data)
 				// La meta-tx no consumió nonce en el RelayHub: descartar el contador local del
 				// sender para que su próxima lectura "pending" vuelva al nonce real on-chain.
 				service.invalidateNonce(badSender.Hex())
+				hubRejected(ctx, transactionID, badSender, errorCode)
 				receipt.Status = uint64(0)
 
 				jsonReceipt, err := json.Marshal(receipt)
@@ -235,6 +268,8 @@ func (service *RelaySignerService) GetTransactionReceipt(ctx context.Context, id
 // GetMetaTxResult devuelve el resultado parseado de un meta-tx relayado, a partir de los eventos del
 // RelayHub en el receipt: { mined, success, executed, errorCode, revertReason, deployedAddress }.
 func (service *RelaySignerService) GetMetaTxResult(ctx context.Context, id json.RawMessage, transactionID string) *rpc.JsonrpcMessage {
+	ctx = service.recallMetaTx(ctx, common.HexToHash(transactionID))
+
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
@@ -293,6 +328,7 @@ func (service *RelaySignerService) GetMetaTxResult(ctx context.Context, id json.
 				sawBadTransaction = true
 				code, badSender := badTransactionErrorCode(ctx, id, lg.Data)
 				service.invalidateNonce(badSender.Hex())
+				hubRejected(ctx, transactionID, badSender, code)
 				out["success"] = false
 				out["executed"] = false
 				out["errorCode"] = errorCodeName(code)
@@ -565,6 +601,21 @@ func decodeKnownCustomError(selector string, output []byte) string {
 		}
 	}
 	return def.name + "(" + strings.Join(parts, ", ") + ")"
+}
+
+// hubRejected registra que el RelayHub rechazo una metatx ya enviada.
+//
+// Es el escenario que rompe la cadena de nonces: el hub NO consumio el nonce del usuario, asi que
+// todas las metatx que se encadenaron despues quedaron invalidas. El contexto trae el metaTxId de
+// la metatx original aunque este receipt se este procesando en otra peticion. Ver D11.
+func hubRejected(ctx context.Context, transactionID string, from common.Address, errorCode uint8) {
+	log.Warn(ctx, "relay.hub_rejected", map[string]interface{}{
+		"transactionHash": "0x" + strings.TrimPrefix(transactionID, "0x"),
+		"from":            from.Hex(),
+		"errorCode":       errorCode,
+		"errorCodeName":   errorCodeName(errorCode),
+		"note":            "el nonce reservado se descarta: las metatx encadenadas despues de esta van a fallar",
+	})
 }
 
 // errorCodeName traduce el enum ErrorCode de IRelayHub a un nombre legible.

@@ -14,12 +14,22 @@ import (
 	"testing"
 	"time"
 
+	audit "github.com/LACNetNetworks/gas-relay-signer/audit"
+	"github.com/LACNetNetworks/gas-relay-signer/events"
 	"github.com/LACNetNetworks/gas-relay-signer/model"
 	"github.com/LACNetNetworks/gas-relay-signer/rpc"
 	"github.com/ethereum/go-ethereum/common"
 )
 
 var sequence uint8 = 0
+
+// TestMain sube el nivel de log para que los eventos de operacion no ensucien la salida de los
+// tests. No afecta a lo que se verifica: los tests leen el bus, y el nivel regula la consola y no
+// la observabilidad.
+func TestMain(m *testing.M) {
+	audit.InitStructured("error", false)
+	os.Exit(m.Run())
+}
 
 func TestInit(t *testing.T) {
 	srv := serverMock()
@@ -504,6 +514,11 @@ func mockSendMetatransaction(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"jsonrpc" : "2.0","id" : 53,"result" : "0x6"}`))
 	case 15:
 		_, _ = w.Write([]byte(`{"jsonrpc" : "2.0","id" : 53,"result" : "0x6"}`))
+	default:
+		// Sin esto el mock deja de responder pasadas 24 llamadas y el siguiente test que envie
+		// una metatx falla por EOF, segun cuantas hayan enviado los anteriores. Las tres ramas de
+		// arriba escriben lo mismo, asi que el default no cambia lo que responde ninguna.
+		_, _ = w.Write([]byte(`{"jsonrpc" : "2.0","id" : 53,"result" : "0x6"}`))
 	}
 	sequence++
 }
@@ -733,4 +748,82 @@ func createKeyMock(path string) {
 
 func setKeyMock() {
 	os.Setenv("WRITER_KEY", "0xb3e7374dca5ca90c3899dbb2c978051437fb15534c945bf59df16d6c80be27c0")
+}
+
+// TestSentEventCarriesContractFields cubre la tarea 5.5: relay.sent lleva los campos del contrato,
+// incluidos los que este servicio todavia no calcula, que se emiten sin valor en lugar de omitirse.
+func TestSentEventCarriesContractFields(t *testing.T) {
+	srv := serverMock()
+	defer srv.Close()
+
+	events.Init(true, 50)
+	defer events.Init(false, 0)
+
+	contents := []byte(`{"id":2914410858336929,"jsonrpc":"2.0","params":["0xf8840180831e8480946e6bbf31aa45042d53128339383fcd1c377b42c780a46057361d00000000000000000000000000000000000000000000000000000000000001591ba028934b543809922b277e85f6bcf7b1f25e937de05c5138e17fdfa480ba74e84ba055a2a611763ffcb748547408093551928c9549f95a0a9cabd3b1f1f2e166cc16"],"method":"eth_sendRawTransaction"}`)
+	var rpcMessage rpc.JsonrpcMessage
+	_ = json.Unmarshal(contents, &rpcMessage)
+
+	dir, _ := os.Getwd()
+	createKeyMock(dir + "/keyMock")
+	setKeyMock()
+	defer func() { _ = os.Remove("keyMock") }()
+
+	applicationConfig := model.ApplicationConfig{NodeURL: srv.URL + "/getRelayHubContract", ContractAddress: "0x0ae2Da68515Ef8DC4bBCa1fA1bcE00C508b2Af4B", NodeKeyPath: dir + "/keyMock"}
+	config := model.Config{Application: applicationConfig}
+	relaySignerService := new(RelaySignerService)
+	_ = relaySignerService.Init(&config)
+	relaySignerService.Config.Application.NodeURL = srv.URL + "/sendMetatransaction"
+
+	to := common.HexToAddress("0x82a978b3f5962a5b0957d9ee9eef472ee55b42f1")
+	encodedFunction, _ := hex.DecodeString("0xf861808082ea6094fd32cfc2e71611626d6368a41f915d0077a306a180b8446057361d000000000000000000000000000000000000000000000000000000000000003c000000000000000000000000173cf75f0905338597fcd38f5ce13e6840b230e9")
+	var r, s [32]byte
+	sender := "0x92c9885663f6e84127c857d3137936c424b7e07555d2bc7d8bd781b3f0847ac8"
+
+	ctx := audit.WithMetaTxID(audit.WithRequestID(context.Background(), "req-1"), "meta-1")
+	response := relaySignerService.SendMetatransaction(ctx, rpcMessage.ID, &to, 200000, encodedFunction, 27, r, s, sender, 34)
+
+	// La respuesta al cliente no cambio por haber pasado a manejar la transaccion entera.
+	if response.String() != `{"jsonrpc":"2.0","id":2914410858336929,"result":"0x9c2fb4956ce18491021a534106fe50e7cfe86bcc373b1626623fa0366f4cc3bc"}` {
+		t.Errorf("la respuesta cambio de forma: %s", response.String())
+	}
+
+	var sent events.Event
+	for _, event := range events.Replay(0) {
+		if event.Name() == "relay.sent" {
+			sent = event
+		}
+	}
+	if sent.Seq == 0 {
+		t.Fatal("no se emitio relay.sent")
+	}
+
+	for _, field := range []string{
+		"transactionHash", "hubNonce", "writerNodeNonce", "metaTxGasLimit",
+		"simulated", "simulatedErrorCodeName", "pendingForUser",
+	} {
+		if _, present := sent.Line[field]; !present {
+			t.Errorf("falta el campo %q del contrato: %v", field, sent.Line)
+		}
+	}
+	if sent.Field("transactionHash") != "0x9c2fb4956ce18491021a534106fe50e7cfe86bcc373b1626623fa0366f4cc3bc" {
+		t.Errorf("transactionHash = %v", sent.Field("transactionHash"))
+	}
+	if sent.Field("hubNonce") != uint64(34) {
+		t.Errorf("hubNonce = %v, se esperaba 34 (el nonce que trae firmado la metatx)", sent.Field("hubNonce"))
+	}
+	if sent.Field("metaTxGasLimit") != uint64(200000) {
+		t.Errorf("metaTxGasLimit = %v, se esperaba 200000", sent.Field("metaTxGasLimit"))
+	}
+	if _, ok := sent.Field("writerNodeNonce").(uint64); !ok {
+		t.Errorf("writerNodeNonce = %v (%T), se esperaba el nonce de la cuenta del writer node",
+			sent.Field("writerNodeNonce"), sent.Field("writerNodeNonce"))
+	}
+	for _, field := range []string{"simulated", "simulatedErrorCodeName", "pendingForUser"} {
+		if sent.Field(field) != nil {
+			t.Errorf("%q = %v, este servicio todavia no lo calcula", field, sent.Field(field))
+		}
+	}
+	if sent.Field("metaTxId") != "meta-1" || sent.Field("reqId") != "req-1" {
+		t.Errorf("relay.sent perdio la correlacion: %v", sent.Line)
+	}
 }

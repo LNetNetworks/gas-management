@@ -72,13 +72,13 @@
 - [ ] 4.4 Derivar con `context.WithoutCancel` el contexto de los eventos posteriores a la respuesta
   segun D2, y verificar con un test que un evento emitido tras retornar el handler conserva `reqId`
   y `metaTxId`
-- [ ] 4.5 Recordar, al enviar la metatx, el `reqId` y el `metaTxId` contra el hash de la transaccion
+- [x] 4.5 Recordar, al enviar la metatx, el `reqId` y el `metaTxId` contra el hash de la transaccion
   enviada, con TTL por entrada y tope de entradas segun D11, y verificar con tests que una entrada
   vencida se libera y que al llegar al tope se descartan las mas antiguas
-- [ ] 4.6 Rehidratar ese contexto en los caminos que procesan un receipt —`GetTransactionReceipt` y
+- [x] 4.6 Rehidratar ese contexto en los caminos que procesan un receipt —`GetTransactionReceipt` y
   `GetMetaTxResult`—, y verificar con un test que el evento emitido ahi lleva el `metaTxId` de la
   metatx y el `reqId` de la peticion que la relayo, no el de la peticion que consulto el receipt
-- [ ] 4.7 Verificar con un test que un receipt cuyo hash ya no esta en el mapa no rompe nada: el
+- [x] 4.7 Verificar con un test que un receipt cuyo hash ya no esta en el mapa no rompe nada: el
   evento no se emite o se emite sin `metaTxId`, y la peticion que consulto el receipt se responde
   igual que antes
 
@@ -86,21 +86,21 @@
 
 - [x] 5.1 Emitir `relay.received` antes de decodificar, con `rawTxHash` y `rawTxBytes`, y verificar
   con un test que una raw tx malformada tambien deja el evento con su `metaTxId`
-- [ ] 5.2 Decodificar el sufijo del gas model —los ultimos 64 bytes del `data`— para obtener
+- [x] 5.2 Decodificar el sufijo del gas model —los ultimos 64 bytes del `data`— para obtener
   `nodeAddress`, `expiration`, `expiresInSeconds` y `selector`, y emitir `relay.decoded` con los
   campos del contrato; verificar con un test que estan todos los que la pagina consume
-- [ ] 5.3 Verificar con tests que esa decodificacion solo registra y nunca valida: un `data` mas
+- [x] 5.3 Verificar con tests que esa decodificacion solo registra y nunca valida: un `data` mas
   corto que el sufijo emite los cuatro campos sin valor, la metatx sigue su curso y la respuesta
   JSON-RPC es identica a la actual
-- [ ] 5.4 Devolver desde `blockchain/client.go` la transaccion enviada en lugar de solo su hash
+- [x] 5.4 Devolver desde `blockchain/client.go` la transaccion enviada en lugar de solo su hash
   para poder informar `writerNodeNonce`, y verificar con un test que la respuesta de
   `eth_sendRawTransaction` sigue siendo el hash y no cambia de forma
-- [ ] 5.5 Emitir `relay.sent` con los campos del contrato, incluidos los que este servicio aun no
+- [x] 5.5 Emitir `relay.sent` con los campos del contrato, incluidos los que este servicio aun no
   calcula —`simulated`, `simulatedErrorCodeName` y `pendingForUser`— con un valor interpretable en
   lugar de omitirlos
 - [x] 5.6 Emitir `relay.rejected` con `error`, y con `code` y `errorType` cuando el rechazo los
   trae, y verificar con un test que comparte el `metaTxId` de los eventos previos de esa metatx
-- [ ] 5.7 Emitir `relay.hub_rejected` donde el servicio ya detecta `BadTransactionSent` e invalida
+- [x] 5.7 Emitir `relay.hub_rejected` donde el servicio ya detecta `BadTransactionSent` e invalida
   el nonce del sender, con `transactionHash`, `from`, `errorCode` y el `errorCodeName` que ya
   traduce el servicio, y verificar con un test que lleva el `metaTxId` de la metatx original
 - [ ] 5.8 Agregar un test de contrato que recorra los eventos emitidos y falle si a alguno le falta

@@ -1,16 +1,24 @@
 package controller
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	audit "github.com/LACNetNetworks/gas-relay-signer/audit"
 	"github.com/LACNetNetworks/gas-relay-signer/events"
 	"github.com/LACNetNetworks/gas-relay-signer/model"
+	"github.com/LACNetNetworks/gas-relay-signer/service"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // withBus deja el bus del proceso activo durante el test y lo apaga al terminar. Los eventos se
@@ -293,4 +301,171 @@ func TestCodedRejectionCarriesItsCode(t *testing.T) {
 		t.Errorf("el evento registra error=%v y el cliente recibe %q",
 			rejected.Field("error"), response.Error.Message)
 	}
+}
+
+// --------------------------------------------------------------- relay.decoded
+
+// signedRawTx arma una raw tx firmada pre-EIP155 (v = 27/28), que es la unica forma que el
+// RelayHub acepta y la que el servicio exige.
+func signedRawTx(t *testing.T, to *common.Address, data []byte, nonce, gas uint64) string {
+	t.Helper()
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("no se pudo generar la clave de prueba: %v", err)
+	}
+	var tx *types.Transaction
+	if to == nil {
+		tx = types.NewContractCreation(nonce, big.NewInt(0), gas, big.NewInt(0), data)
+	} else {
+		tx = types.NewTransaction(nonce, *to, big.NewInt(0), gas, big.NewInt(0), data)
+	}
+	signed, err := types.SignTx(tx, types.HomesteadSigner{}, key)
+	if err != nil {
+		t.Fatalf("no se pudo firmar la tx de prueba: %v", err)
+	}
+	raw, err := rlp.EncodeToBytes(signed)
+	if err != nil {
+		t.Fatalf("no se pudo serializar la tx de prueba: %v", err)
+	}
+	return "0x" + hex.EncodeToString(raw)
+}
+
+// gasModelData arma un data con el sufijo del modelo de gas: innerData + address + expiration.
+func gasModelData(selector string, nodeAddress common.Address, expiration uint64) []byte {
+	inner, _ := hex.DecodeString(strings.TrimPrefix(selector, "0x"))
+	suffix := make([]byte, 64)
+	copy(suffix[12:32], nodeAddress.Bytes())
+	new(big.Int).SetUint64(expiration).FillBytes(suffix[32:64])
+	return append(inner, suffix...)
+}
+
+// controllerWithService devuelve un controller con un servicio utilizable, para los casos que
+// pasan de la decodificacion.
+func controllerWithService() *RelayController {
+	relaySignerService := new(service.RelaySignerService)
+	relaySignerService.Config = &model.Config{}
+	controller := new(RelayController)
+	controller.Init(&model.Config{}, relaySignerService)
+	return controller
+}
+
+// TestDecodedCarriesEveryContractField cubre la tarea 5.2: relay.decoded lleva los once campos
+// que la pagina consume, incluidos los cuatro que salen del sufijo del modelo de gas.
+func TestDecodedCarriesEveryContractField(t *testing.T) {
+	withBus(t)
+
+	nodeAddress := common.HexToAddress("0x173cf75f0905338597fcd38f5ce13e6840b230e9")
+	expiration := uint64(time.Now().Unix() + 600)
+	to := common.HexToAddress("0x82a978b3f5962a5b0957d9ee9eef472ee55b42f1")
+	rawTx := signedRawTx(t, &to, gasModelData("0x6057361d", nodeAddress, expiration), 34, 200000)
+
+	controllerWithService().SignTransaction(httptest.NewRecorder(), rawTxRequest(rawTx))
+
+	decoded, found := eventNamed("relay.decoded")
+	if !found {
+		t.Fatalf("no se emitio relay.decoded; el bus tiene %v", eventNames())
+	}
+
+	contractFields := []string{
+		"from", "to", "isDeploy", "nonce", "userGasLimit", "metaTxGasLimit",
+		"nodeAddress", "expiration", "expiresInSeconds", "dataBytes", "selector",
+	}
+	for _, field := range contractFields {
+		if _, present := decoded.Line[field]; !present {
+			t.Errorf("falta el campo %q del contrato: %v", field, decoded.Line)
+		}
+	}
+	if decoded.Field("nodeAddress") != nodeAddress.Hex() {
+		t.Errorf("nodeAddress = %v, se esperaba %s", decoded.Field("nodeAddress"), nodeAddress.Hex())
+	}
+	if decoded.Field("expiration") != expiration {
+		t.Errorf("expiration = %v, se esperaba %d", decoded.Field("expiration"), expiration)
+	}
+	if segundos, _ := decoded.Field("expiresInSeconds").(int64); segundos <= 0 || segundos > 600 {
+		t.Errorf("expiresInSeconds = %v, se esperaba un valor cercano a 600", decoded.Field("expiresInSeconds"))
+	}
+	if decoded.Field("selector") != "0x6057361d" {
+		t.Errorf("selector = %v, se esperaba 0x6057361d", decoded.Field("selector"))
+	}
+	if decoded.Field("to") != to.Hex() || decoded.Field("isDeploy") != false {
+		t.Errorf("to/isDeploy incorrectos: %v", decoded.Line)
+	}
+	if decoded.Field("nonce") != uint64(34) || decoded.Field("userGasLimit") != uint64(200000) {
+		t.Errorf("nonce/userGasLimit incorrectos: %v", decoded.Line)
+	}
+	if decoded.Field("dataBytes") != 68 {
+		t.Errorf("dataBytes = %v, se esperaban 68 (4 de selector + 64 de sufijo)", decoded.Field("dataBytes"))
+	}
+	// metaTxGasLimit = dataBytes*105 + 300000 + userGasLimit, igual que en el relayer de Node.
+	if decoded.Field("metaTxGasLimit") != uint64(68*105+300000+200000) {
+		t.Errorf("metaTxGasLimit = %v, se esperaba %d", decoded.Field("metaTxGasLimit"), 68*105+300000+200000)
+	}
+}
+
+// TestDeployIsReportedAsSuch: una metatx sin destino es un deploy.
+func TestDeployIsReportedAsSuch(t *testing.T) {
+	withBus(t)
+
+	rawTx := signedRawTx(t, nil, gasModelData("0x60806040", common.HexToAddress("0x1"), uint64(time.Now().Unix()+60)), 0, 500000)
+	controllerWithService().SignTransaction(httptest.NewRecorder(), rawTxRequest(rawTx))
+
+	decoded, found := eventNamed("relay.decoded")
+	if !found {
+		t.Fatalf("no se emitio relay.decoded; el bus tiene %v", eventNames())
+	}
+	if decoded.Field("isDeploy") != true {
+		t.Errorf("isDeploy = %v, se esperaba true", decoded.Field("isDeploy"))
+	}
+	if decoded.Field("to") != nil {
+		t.Errorf("to = %v, un deploy no tiene destino", decoded.Field("to"))
+	}
+}
+
+// TestSuffixDecodingNeverRejects cubre la tarea 5.3: el sufijo se decodifica SOLO para registrar.
+// Un data mas corto que el sufijo emite los cuatro campos sin valor, y la metatx sigue su curso.
+func TestSuffixDecodingNeverRejects(t *testing.T) {
+	withBus(t)
+
+	// 36 bytes de data: menos que los 64 del sufijo.
+	to := common.HexToAddress("0x6e6bbf31aa45042d53128339383fcd1c377b42c7")
+	corto, _ := hex.DecodeString("6057361d" + strings.Repeat("0", 64))
+	rawTx := signedRawTx(t, &to, corto, 1, 200000)
+
+	controllerWithService().SignTransaction(httptest.NewRecorder(), rawTxRequest(rawTx))
+
+	decoded, found := eventNamed("relay.decoded")
+	if !found {
+		t.Fatalf("un data sin sufijo debe emitir relay.decoded igual; el bus tiene %v", eventNames())
+	}
+	for _, field := range []string{"nodeAddress", "expiration", "expiresInSeconds", "selector"} {
+		if _, present := decoded.Line[field]; !present {
+			t.Errorf("el campo %q debe emitirse igual aunque no tenga valor aplicable: %v", field, decoded.Line)
+		}
+		if decoded.Field(field) != nil {
+			t.Errorf("%q = %v, se esperaba sin valor", field, decoded.Field(field))
+		}
+	}
+	// Los campos que no dependen del sufijo siguen estando.
+	if decoded.Field("from") == nil || decoded.Field("dataBytes") != 36 {
+		t.Errorf("los campos que no dependen del sufijo se perdieron: %v", decoded.Line)
+	}
+	// Y la metatx no se rechazo POR el sufijo: llego hasta la verificacion del cupo de gas.
+	if rejected, found := eventNamed("relay.rejected"); found {
+		motivo, _ := rejected.Field("error").(string)
+		if strings.Contains(strings.ToLower(motivo), "suffix") || strings.Contains(strings.ToLower(motivo), "sufijo") {
+			t.Errorf("el sufijo no debe rechazar la metatx, pero el motivo fue: %q", motivo)
+		}
+		if rejected.Seq < decoded.Seq {
+			t.Errorf("el rechazo (seq %d) ocurrio antes de relay.decoded (seq %d)", rejected.Seq, decoded.Seq)
+		}
+	}
+}
+
+// eventNames lista los eventos retenidos, para los mensajes de error.
+func eventNames() []string {
+	var names []string
+	for _, event := range events.Replay(0) {
+		names = append(names, event.Name())
+	}
+	return names
 }
