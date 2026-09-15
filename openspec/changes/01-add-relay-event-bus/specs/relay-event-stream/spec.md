@@ -177,6 +177,27 @@ que el evento y la respuesta no puedan indicar motivos distintos.
 - **THEN** el campo se emite igualmente con un valor que la vista pueda interpretar
 - **AND** no se omite del evento
 
+### Requirement: Eventos que no pertenecen a ninguna metatx
+
+El sistema PUEDE registrar eventos de operacion que no se refieren a ninguna metatx. Esos eventos
+MUST NOT llevar `metaTxId`, porque no hay ninguna a la que asociarlos, y SHALL llevar el `reqId` de
+la peticion que los origino cuando exista. La vista en vivo los ignora al reconstruir el estado de
+las metatx, pero siguen siendo visibles en el log y en el bus.
+
+El unico de esta capacidad es `http.bad_body`, con el mismo nombre que usa el relayer en Node: una
+peticion cuyo cuerpo no se puede leer o no se puede interpretar como JSON-RPC. Se registra con los
+campos de error definidos para `relay.rejected`.
+
+Existe porque el `reqId` se genera antes de leer el cuerpo: una peticion que nunca llega a tener
+una metatx tambien tiene que dejar rastro, en lugar de desaparecer.
+
+#### Scenario: Una peticion con el cuerpo ilegible
+
+- **WHEN** el sistema recibe una peticion cuyo cuerpo no se puede leer o no es JSON-RPC valido
+- **THEN** registra `http.bad_body` con el `reqId` de esa peticion
+- **AND** el evento no lleva `metaTxId`
+- **AND** la respuesta al cliente es la misma que antes de esta capacidad
+
 ### Requirement: Alcance de emision de esta capacidad
 
 El sistema SHALL emitir `relay.received`, `relay.decoded`, `relay.sent`, `relay.rejected` y

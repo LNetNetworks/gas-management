@@ -68,6 +68,12 @@ Esto cubre la goroutine que se desprende **dentro de la misma peticion**. No cub
 servicio, donde el receipt llega en una peticion HTTP distinta, iniciada por el cliente: ahi no hay
 `ctx` del que derivar. Ese salto lo resuelve D11.
 
+**En este change el mecanismo no tiene consumidor.** Los cinco eventos que se emiten aca salen
+antes de responderle al cliente, y el unico caso posterior a la respuesta — el receipt — nace en otra
+peticion. Se provee igual, probado, porque el primer llamador es el watcher de receipts del change
+04, que emite `relay.settled` mucho despues de haber respondido. Que hoy no se use es una propiedad
+de este change, no un cabo suelto.
+
 ### D3. El emisor estructurado publica en el bus; el bus no conoce al emisor
 
 La dependencia va en un solo sentido: `audit/` importa `events/`, nunca al reves. Es lo que hace
@@ -259,12 +265,19 @@ que rige la relacion entre el log y el bus (D3).
 mientras que el de Node es un nombre simbolico (`BAD_RAW_TX`). El enum de `errors/` es el analogo
 real de esos nombres, y sin el se pierde la posibilidad de filtrar el log por motivo.
 
-**Lo que este change NO hace:** `errors.Wrapf` y `errors.AddErrorContext` reconstruyen el error sin
-copiar el `errorCode`, asi que un error envuelto pierde su codigo. Es un defecto real, pero ese
-mismo valor es el que viaja en la respuesta JSON-RPC al cliente: corregirlo cambiaria codigos de
-error que los integradores ya reciben, y este change no cambia comportamiento observable. El evento
-va a mostrar el mismo codigo degradado que la respuesta, que es lo correcto mientras el defecto
-exista. Corregirlo es un change aparte.
+**Un defecto latente que este change NO corrige.** En `errors/` conviven dos formas de envolver un
+error, y solo una conserva el codigo:
+
+| Forma | Codigo | Se usa |
+|---|---|---|
+| `TipoDeError.Wrap` / `.Wrapf` (metodo) | lo conserva | si, es la unica que aparece en el codigo |
+| `errors.Wrap` / `errors.Wrapf` / `errors.AddErrorContext` (paquete) | lo descarta | no, en ningun call site fuera de `errors/errors.go` |
+
+El defecto es real pero hoy no lo alcanza nadie, y no habria que corregirlo dentro de este change
+aunque lo alcanzara: ese mismo `errorCode` es el que viaja en la respuesta JSON-RPC, asi que
+arreglarlo cambiaria codigos de error que los integradores ya reciben. Mientras el defecto exista,
+lo correcto es que el evento muestre exactamente lo que recibio el cliente, que es lo que garantiza
+leer ambos de la misma fuente.
 
 ### D13. Los campos que Go todavia no calcula
 
