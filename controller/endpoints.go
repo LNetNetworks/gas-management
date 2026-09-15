@@ -142,9 +142,16 @@ func (controller *RelayController) Relay(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
-// detailsOf expone el detalle adicional de un rechazo cuando lo hay. El vencimiento de la espera
-// lleva el hash, para que el cliente consulte la metatx en lugar de reenviarla.
+// detailsOf expone el detalle adicional de un rechazo cuando lo hay.
+//
+// Un rechazo que trae su propio detalle -el nonce esperado, cuantas metatx hay en vuelo- lo usa tal
+// cual: es lo que permite a un cliente decidir sin parsear el texto del mensaje. El vencimiento de
+// la espera no lo trae y se arma aca: lleva que la metatx SE ENVIO, para que el cliente la consulte
+// en lugar de reenviarla.
 func detailsOf(err error) interface{} {
+	if details := service.DetailsOf(err); details != nil {
+		return details
+	}
 	if service.CodeOf(err) != service.CodeReceiptTimeout {
 		return nil
 	}

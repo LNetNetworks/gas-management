@@ -101,9 +101,15 @@ igual: es a la que se acude cuando algo anda mal, asi que no puede ser la primer
 `nextNonce` es con lo que hay que firmar ahora, contando las metatx ya relayadas y todavia sin
 minarse. Encadenar sin `nextNonce` produce nonces repetidos.
 
-`?peek=true` pide consultar sin reservar. Se acepta desde ahora para que un cliente escrito contra
-el relayer de Node funcione sin cambios, pero **hoy no cambia la respuesta**: este servicio todavia
-no reserva nonces.
+`?peek=true` pide consultar sin tomar posicion en la cola. Con `reorder.autoNonce` apagado -el
+default- no cambia la respuesta, porque no hay reparto que evitar. Con el reparto encendido, las
+consultas del mismo usuario se serializan y cada una se lleva un numero distinto; `peek` mira sin
+entrar en esa cola.
+
+Lo que se entrega es un TURNO y no una reserva: consultar no adelanta por si solo el proximo nonce.
+Un numero entregado y nunca usado no traba a nadie -al vencer `autoNonceTicketMs` el siguiente que
+pregunte se lleva ese mismo numero-, y lo que hace que dos clientes se lleven numeros distintos es
+que la metatx del primero llegue.
 
 ### `POST /relay`
 
@@ -124,20 +130,37 @@ servicio todavia no tiene:
 | Campo | Node | Aca | Por que |
 |---|---|---|---|
 | `minExpirationSeconds`, `expirationToleranceSeconds` (`/info`) | la ventana exigida | siempre `0` | este servicio no valida la expiracion del modelo de gas |
-| `autoNonce`, `autoNonceTicketMs` (`/info`) | segun configuracion | `false` y `0` | no hay reserva de nonces |
 | `relayHubSource` (`/info`) | `config` o `proxy` | siempre `proxy` | la direccion siempre se resuelve del proxy |
 | `reorderEnabled`, `receiptTimeoutMs` (`/info`) | no existen | presentes | parametros propios de este servicio |
-| `pending` (`/nonce`) | del tracker de lo en vuelo | del cache de nonces | el tracker autoritativo llega con el reordenamiento |
-| `peek` (`/nonce`) | evita reservar | sin efecto | no hay reserva que evitar |
 | `simulated` (`/relay`) | segun hubo pre-chequeo | siempre `false` | no hay pre-chequeo por simulacion con `eth_call` |
 | `errorCode` (`/relay`) | de la simulacion o del hub | solo del hub | idem |
 | `output` (`/relay`) | return data, o el motivo del revert | el motivo del revert, o sin valor | el return data de una llamada exitosa todavia no se expone |
 
-De los trece codigos de error del catalogo de Node, este servicio produce siete: `BAD_RAW_TX`,
-`BAD_META_TX`, `SENDER_NOT_PERMITTED`, `PERMISSIONING_UNAVAILABLE`, `SEND_FAILED`,
-`RECEIPT_TIMEOUT` y `RELAY_ERROR`. Los demas corresponden a validaciones que no existen todavia
-(expiracion, direccion del nodo, simulacion) o al tracker de nonces. Lo que no tiene codigo propio
-usa `RELAY_ERROR`: no se inventan codigos fuera del catalogo.
+De los trece codigos de error del catalogo de Node, este servicio produce nueve: `BAD_RAW_TX`,
+`BAD_META_TX`, `BAD_NONCE`, `TOO_MANY_INFLIGHT`, `SENDER_NOT_PERMITTED`,
+`PERMISSIONING_UNAVAILABLE`, `SEND_FAILED`, `RECEIPT_TIMEOUT` y `RELAY_ERROR`. Los cuatro que
+faltan corresponden a validaciones que todavia no existen (expiracion, direccion del nodo,
+simulacion). Lo que no tiene codigo propio usa `RELAY_ERROR`: no se inventan codigos fuera del
+catalogo.
+
+### Reordenamiento de nonces
+
+Con `reorder.enabled = true` el servicio deja de mandar y esperar a ver que dice el hub:
+
+- **Valida el nonce antes de enviar.** Uno ya consumido se rechaza con `BAD_NONCE` sin gastar una
+  transaccion del writer node.
+- **Retiene la metatx adelantada** hasta que se cierre el hueco, en vez de gastarla para descubrir
+  que llego fuera de orden. La ventana mide **estancamiento**: se renueva cada vez que el nonce
+  esperado avanza, asi que una rafaga larga no pierde la cola por reloj. Al vencer se responde el
+  mismo `BAD_NONCE`, sin haber enviado nada.
+- **Acota la rafaga por usuario** con `maxInflightPerUser`: al superarlo, `TOO_MANY_INFLIGHT`.
+- **Detecta como termino cada metatx** sin que el cliente pregunte, y libera su lugar.
+
+Semantica observable que cambia con el flag encendido: `eth_sendRawTransaction` de una metatx
+adelantada **no responde** hasta que le toca el turno o vence la ventana. Es inherente a reordenar
+sobre HTTP y es lo que hace el relayer de Node.
+
+Con el flag apagado -el default- nada de esto corre y el comportamiento es el de siempre.
 
 ## Know More
 

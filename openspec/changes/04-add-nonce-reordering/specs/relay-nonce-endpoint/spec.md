@@ -40,9 +40,14 @@ llevarse un nonce distinto, de modo que dos clientes que preguntan a la vez no f
 numero. Una consulta con el parametro MUST seguir sin reservar: informa lo que hay sin tomar
 posicion en la cola.
 
-Un numero entregado y no usado MUST NOT bloquear la cola: al vencer su plazo, el siguiente que
-pregunte SHALL llevarse ese mismo numero. Una reserva que solo su duenio pudiera destapar trabaria
-detras a todos los demas clientes.
+Lo que se entrega es un TURNO y no una reserva: consultar MUST NOT adelantar por si solo el proximo
+nonce. Lo que hace que dos clientes se lleven numeros distintos es que la metatx del primero llegue
+-el caso normal, en el orden de milisegundos-, no el acto de consultar.
+
+Por eso un numero entregado y no usado MUST NOT bloquear la cola: al vencer su plazo, el siguiente
+que pregunte SHALL llevarse ese mismo numero. Si consultar adelantara el numero, un cliente que
+pregunta y no envia dejaria al siguiente firmando un nonce que el hub no va a aceptar todavia, y su
+metatx quedaria retenida hasta rechazarse.
 
 #### Scenario: Consulta con el parametro
 
@@ -62,11 +67,39 @@ detras a todos los demas clientes.
 
 #### Scenario: Dos clientes preguntan a la vez con el reparto encendido
 
-- **WHEN** dos clientes consultan el nonce del mismo usuario a la vez y el reparto esta encendido
-- **THEN** cada uno recibe un nonce distinto y consecutivo
+- **WHEN** dos clientes consultan el nonce del mismo usuario a la vez, el reparto esta encendido y la
+  metatx del primero llega mientras el segundo espera
+- **THEN** el segundo recibe el nonce siguiente al que se llevo el primero
+- **AND** ninguno de los dos recibe un numero que el otro ya tenia
 
 #### Scenario: Un nonce entregado y nunca usado
 
 - **WHEN** se entrega un nonce y no llega la metatx que lo use dentro de su plazo
 - **THEN** el siguiente cliente que consulte recibe ese mismo nonce
 - **AND** ningun cliente queda esperando de forma indefinida
+
+### Requirement: El nonce informado es el mismo que responde el camino JSON-RPC
+
+El proximo nonce que informa esta ruta y el que responde `eth_getTransactionCount` en estado
+pendiente SHALL salir del MISMO estado: las dos puertas son dos formas de preguntar lo mismo, y si
+cada una llevara su cuenta, un cliente que use una y otra firmaria con nonces incompatibles.
+
+Mientras el reparto de nonces este apagado -el estado por defecto-, para la misma direccion y en el
+mismo momento las dos SHALL informar el MISMO valor.
+
+Con el reparto encendido las dos SHALL entregar de la misma secuencia y ningun numero SHALL
+entregarse dos veces, por ninguna de las dos. Ahi la invariante no puede ser que dos llamadas
+devuelvan lo mismo -el punto del reparto es justamente que no lo hagan-, sino que ninguna entregue
+un numero que otra ya entrego.
+
+#### Scenario: Las dos puertas coinciden
+
+- **WHEN** se consulta el nonce de una direccion por esta ruta y por el camino JSON-RPC, con el
+  reparto apagado
+- **THEN** el proximo nonce informado es el mismo
+
+#### Scenario: Las dos puertas reparten de la misma secuencia
+
+- **WHEN** se consulta el nonce de la misma direccion por las dos puertas con el reparto encendido
+- **THEN** cada consulta recibe un numero distinto
+- **AND** ninguno de los dos numeros fue entregado antes por ninguna de las dos puertas

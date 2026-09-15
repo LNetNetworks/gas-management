@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -86,7 +87,7 @@ func TestCloseEventKeepsTheOriginalCorrelation(t *testing.T) {
 
 	// Peticion 1: se relaya la metatx y se recuerda a que metatx pertenece el hash.
 	relayCtx := audit.WithMetaTxID(audit.WithRequestID(context.Background(), "req-relay"), "meta-1")
-	relaySignerService.rememberMetaTx(relayCtx, common.HexToHash(relayedHash))
+	relaySignerService.rememberMetaTx(relayCtx, common.HexToHash(relayedHash), "", nil)
 
 	// Peticion 2, mas tarde y con su propio reqId: el cliente consulta el receipt.
 	receiptCtx := audit.WithRequestID(context.Background(), "req-receipt")
@@ -130,7 +131,7 @@ func TestForgottenHashDoesNotBreakTheReceiptPath(t *testing.T) {
 	defer srv.Close()
 
 	recordada := serviceAgainst(srv.URL)
-	recordada.rememberMetaTx(audit.WithMetaTxID(context.Background(), "meta-1"), common.HexToHash(relayedHash))
+	recordada.rememberMetaTx(audit.WithMetaTxID(context.Background(), "meta-1"), common.HexToHash(relayedHash), "", nil)
 	conMemoria := recordada.GetTransactionReceipt(context.Background(), json.RawMessage(`1`), relayedHash)
 
 	olvidada := serviceAgainst(srv.URL)
@@ -162,7 +163,7 @@ func TestMetaTxMemoryExpires(t *testing.T) {
 	hash := common.HexToHash(relayedHash)
 
 	ctx := audit.WithMetaTxID(context.Background(), "meta-1")
-	relaySignerService.rememberMetaTx(ctx, hash)
+	relaySignerService.rememberMetaTx(ctx, hash, "", nil)
 
 	if audit.MetaTxID(relaySignerService.recallMetaTx(context.Background(), hash)) != "meta-1" {
 		t.Fatal("una entrada recien anotada debe correlacionar")
@@ -185,12 +186,15 @@ func TestMetaTxMemoryIsBounded(t *testing.T) {
 	relaySignerService := serviceAgainst("")
 	ctx := audit.WithMetaTxID(context.Background(), "meta-1")
 
-	primera := common.BigToHash(common.Big1)
-	relaySignerService.rememberMetaTx(ctx, primera)
+	primera := common.BigToHash(big.NewInt(1))
+	relaySignerService.rememberMetaTx(ctx, primera, "", nil)
 	relaySignerService.metaTx[primera].rememberedAt = time.Now().Add(-time.Minute)
 
+	// Un big.Int PROPIO por vuelta: `common.Big1` es un global del paquete, y mutarlo con SetInt64
+	// lo deja en otro valor para todo el proceso. El sintoma era este mismo test fallando en la
+	// segunda corrida dentro del mismo binario (`-count=2`), porque `primera` ya no era el hash de 1.
 	for i := 2; i <= metaTxMemoryMax+10; i++ {
-		relaySignerService.rememberMetaTx(ctx, common.BigToHash(common.Big1.SetInt64(int64(i))))
+		relaySignerService.rememberMetaTx(ctx, common.BigToHash(big.NewInt(int64(i))), "", nil)
 	}
 
 	if len(relaySignerService.metaTx) > metaTxMemoryMax {
@@ -204,7 +208,7 @@ func TestMetaTxMemoryIsBounded(t *testing.T) {
 // TestRememberIgnoresContextWithoutMetaTx: no se anota lo que no se puede correlacionar.
 func TestRememberIgnoresContextWithoutMetaTx(t *testing.T) {
 	relaySignerService := serviceAgainst("")
-	relaySignerService.rememberMetaTx(context.Background(), common.HexToHash(relayedHash))
+	relaySignerService.rememberMetaTx(context.Background(), common.HexToHash(relayedHash), "", nil)
 	if len(relaySignerService.metaTx) != 0 {
 		t.Errorf("sin metaTxId no hay nada que recordar, quedaron %d entradas", len(relaySignerService.metaTx))
 	}

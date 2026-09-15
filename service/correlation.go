@@ -36,14 +36,24 @@ type metaTxEntry struct {
 	reqID        string
 	metaTxID     string
 	rememberedAt time.Time
+
+	// senderKey y chain son lo que hace falta para liberar lo en vuelo cuando esta metatx se
+	// resuelve. La cadena se guarda por identidad: si para entonces se descarto, liberar sobre ella
+	// no toca a la que la reemplazo. Ver design.md, D4.
+	senderKey string
+	chain     *nonceEntry
+
+	// settled marca que el cierre de esta metatx ya se registro. Gana quien llegue primero -el
+	// watcher o la consulta del cliente- y el segundo no emite nada. Ver design.md, D6.
+	settled bool
 }
 
 // rememberMetaTx anota, contra el hash de la transaccion enviada, la correlacion de la peticion que
 // la relayo. Se llama justo despues del envio, que es el unico momento en que se tienen las dos
 // cosas a mano.
-func (service *RelaySignerService) rememberMetaTx(ctx context.Context, hash common.Hash) {
+func (service *RelaySignerService) rememberMetaTx(ctx context.Context, hash common.Hash, senderKey string, chain *nonceEntry) {
 	metaTxID := log.MetaTxID(ctx)
-	if metaTxID == "" {
+	if metaTxID == "" && chain == nil {
 		return
 	}
 
@@ -57,6 +67,8 @@ func (service *RelaySignerService) rememberMetaTx(ctx context.Context, hash comm
 		reqID:        log.RequestID(ctx),
 		metaTxID:     metaTxID,
 		rememberedAt: time.Now(),
+		senderKey:    senderKey,
+		chain:        chain,
 	}
 }
 

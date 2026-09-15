@@ -36,6 +36,13 @@ type ReorderConfig struct {
 	WindowMs           int
 	MaxInflightPerUser int
 	ReceiptTimeoutMs   int
+	// AutoNonce habilita el reparto de nonces: las consultas del mismo usuario se serializan y cada
+	// una se lleva un numero distinto. Apagado, consultar el nonce no reserva nada y dos clientes
+	// que preguntan a la vez se llevan el mismo, que es el comportamiento historico.
+	AutoNonce bool
+	// AutoNonceTicketMs es cuanto se espera la metatx que use un nonce entregado antes de que ese
+	// mismo numero vuelva a entregarse.
+	AutoNonceTicketMs int
 }
 
 // DashboardConfig gobierna el bus de eventos en memoria. `BufferSize` distingue la clave ausente
