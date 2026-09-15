@@ -34,13 +34,18 @@ func (controller *RelayController) Init(config *model.Config, relaySignerService
 
 // SignTransaction ...
 func (controller *RelayController) SignTransaction(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// El reqId se genera ANTES de leer el cuerpo: asi una peticion con un cuerpo ilegible, que
+	// nunca llega a tener una metatx, tambien queda correlacionada en el log. Ver design.md, D8.
+	ctx := log.WithRequestID(r.Context(), log.NewRequestID())
 	w.Header().Set("Content-Type", "application/json")
 
 	//log.GeneralLogger.Println("Body:", r.Body)
 
 	buf, err := io.ReadAll(r.Body)
 	if err != nil {
+		// Se registra y se sigue exactamente como antes: cambiar este flujo cambiaria la
+		// respuesta que recibe el cliente, y este change no altera el contrato JSON-RPC.
+		log.Warn(ctx, "http.bad_body", log.ErrorFields(err))
 		handleError(ctx, nil, err)
 	}
 	rdr1 := io.NopCloser(bytes.NewBuffer(buf))
@@ -52,6 +57,7 @@ func (controller *RelayController) SignTransaction(w http.ResponseWriter, r *htt
 
 	err = json.NewDecoder(rdr1).Decode(&rpcMessage)
 	if err != nil {
+		log.Warn(ctx, "http.bad_body", log.ErrorFields(err))
 		log.GeneralLogger.Println("Invalid params")
 		log.GeneralLogger.Println(err)
 		return

@@ -65,9 +65,9 @@
 - [x] 4.1 Propagar `context.Context` por las firmas de `controller` y `service` que participan del
   camino de relay, y verificar que `go build ./...` y `go test ./...` siguen en verde sin cambios
   en las aserciones existentes
-- [ ] 4.2 Generar el `reqId` en el handler HTTP antes de decodificar el cuerpo, y verificar con un
+- [x] 4.2 Generar el `reqId` en el handler HTTP antes de decodificar el cuerpo, y verificar con un
   test que una peticion con cuerpo ilegible igual emite su evento correlacionado
-- [ ] 4.3 Generar el `metaTxId` al entrar al camino de relay y verificar con un test que dos metatx
+- [x] 4.3 Generar el `metaTxId` al entrar al camino de relay y verificar con un test que dos metatx
   distintas no comparten identificador y que sus eventos no se mezclan
 - [ ] 4.4 Derivar con `context.WithoutCancel` el contexto de los eventos posteriores a la respuesta
   segun D2, y verificar con un test que un evento emitido tras retornar el handler conserva `reqId`
@@ -84,7 +84,7 @@
 
 ## 5. Emision en el camino de relay
 
-- [ ] 5.1 Emitir `relay.received` antes de decodificar, con `rawTxHash` y `rawTxBytes`, y verificar
+- [x] 5.1 Emitir `relay.received` antes de decodificar, con `rawTxHash` y `rawTxBytes`, y verificar
   con un test que una raw tx malformada tambien deja el evento con su `metaTxId`
 - [ ] 5.2 Decodificar el sufijo del gas model —los ultimos 64 bytes del `data`— para obtener
   `nodeAddress`, `expiration`, `expiresInSeconds` y `selector`, y emitir `relay.decoded` con los
@@ -98,7 +98,7 @@
 - [ ] 5.5 Emitir `relay.sent` con los campos del contrato, incluidos los que este servicio aun no
   calcula —`simulated`, `simulatedErrorCodeName` y `pendingForUser`— con un valor interpretable en
   lugar de omitirlos
-- [ ] 5.6 Emitir `relay.rejected` con `error`, y con `code` y `errorType` cuando el rechazo los
+- [x] 5.6 Emitir `relay.rejected` con `error`, y con `code` y `errorType` cuando el rechazo los
   trae, y verificar con un test que comparte el `metaTxId` de los eventos previos de esa metatx
 - [ ] 5.7 Emitir `relay.hub_rejected` donde el servicio ya detecta `BadTransactionSent` e invalida
   el nonce del sender, con `transactionHash`, `from`, `errorCode` y el `errorCodeName` que ya

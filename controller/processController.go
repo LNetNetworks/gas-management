@@ -103,28 +103,54 @@ func processGetMetaTxResult(ctx context.Context, relaySignerService *service.Rel
 	w.Write(data)
 }
 
+// rejectMetaTx registra el rechazo de una metatx y responde el error JSON-RPC.
+//
+// Es el unico punto por el que sale un rechazo del camino de relay: el evento y la respuesta se
+// arman del MISMO error, asi que no pueden indicar motivos distintos. `error` va siempre porque es
+// el campo con el que la vista muestra el motivo; `code` y `errorType` solo cuando el error los
+// trae. Ver design.md, D12.
+func rejectMetaTx(ctx context.Context, id json.RawMessage, w http.ResponseWriter, err error) {
+	log.Warn(ctx, "relay.rejected", log.ErrorFields(err))
+	w.Write(handleError(ctx, id, err))
+}
+
 func processRawTransaction(ctx context.Context, relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
+	// El metaTxId se genera al entrar al camino de relay, no en el handler: una peticion puede
+	// traer mas de una metatx, y sin un id propio por metatx no habria forma de saber cual
+	// relay.sent corresponde a cual relay.received. Ver design.md, D8.
+	ctx = log.WithMetaTxID(ctx, log.NewMetaTxID())
+
 	log.GeneralLogger.Println("Is a rawTransaction")
 	var params []string
 	err := json.Unmarshal(rpcMessage.Params, &params)
 	if err != nil {
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
+	}
+
+	// relay.received se emite ANTES de decodificar, para que una raw tx malformada deje rastro
+	// con su metaTxId en lugar de desaparecer. Ver design.md, D8.
+	if len(params) > 0 {
+		received := map[string]interface{}{
+			"rawTxHash":  service.RawTxHash(params[0]),
+			"rawTxBytes": service.RawTxBytes(params[0]),
+		}
+		if log.ShouldLogRawTx() {
+			received["rawTx"] = params[0]
+		}
+		log.Info(ctx, "relay.received", received)
 	}
 
 	decodeTransaction, err := service.GetTransaction(params[0][2:])
 	if err != nil {
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
 	v, rInt, sInt := decodeTransaction.RawSignatureValues()
 	if (v == nil) || (rInt == nil) || (sInt == nil) {
 		err := errors.New("bad signature ECDSA")
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
@@ -133,15 +159,13 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 	// on-chain. Lo rechazamos temprano con un mensaje claro.
 	if vUint := v.Uint64(); vUint != 27 && vUint != 28 {
 		err := errors.New("transaction must be signed pre-EIP155 (chainId=0, v=27 or 28)")
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
 	message, err := decodeTransaction.AsMessage(types.NewEIP155Signer(decodeTransaction.ChainId()))
 	if err != nil {
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
@@ -166,14 +190,12 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 	defer lock.Unlock()
 	isCorrectGasLimit, err := relaySignerService.VerifyGasLimit(ctx, metaTxGasLimit, rpcMessage.ID)
 	if err != nil {
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 	if !isCorrectGasLimit {
 		err := errors.New("transaction gas limit exceeds block gas limit")
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
@@ -206,8 +228,7 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 	signingDataRLP, err := rlp.EncodeToBytes(signingDataTx.Data)
 	if err != nil {
 		err := errors.New("internal error")
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 
@@ -216,8 +237,7 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 	if err != nil {
 		log.GeneralLogger.Println(err)
 		err := errors.New("internal error")
-		data := handleError(ctx, rpcMessage.ID, err)
-		w.Write(data)
+		rejectMetaTx(ctx, rpcMessage.ID, w, err)
 		return
 	}
 	w.Write(data)
