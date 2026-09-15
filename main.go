@@ -21,6 +21,7 @@ import (
 
 	log "github.com/LACNetNetworks/gas-relay-signer/audit"
 	"github.com/LACNetNetworks/gas-relay-signer/controller"
+	"github.com/LACNetNetworks/gas-relay-signer/events"
 	"github.com/LACNetNetworks/gas-relay-signer/model"
 	"github.com/LACNetNetworks/gas-relay-signer/service"
 	"github.com/spf13/viper"
@@ -39,6 +40,13 @@ func main() {
 	}
 
 	config = getConfigFromFile()
+
+	// El emisor estructurado y el bus se inicializan aca: con la configuracion ya leida y ANTES
+	// de levantar el servidor, para que ningun evento salga con una capacidad o un nivel que
+	// todavia no se leyeron. No va en un init() porque corre antes de que exista config.toml,
+	// ni en una inicializacion perezosa, que esconderia el orden justo donde importa. Ver D5.
+	log.InitStructured(config.Log.Level, config.Log.RawTx)
+	events.Init(config.Dashboard.Enabled, config.Dashboard.BufferSize)
 
 	relaySignerService = new(service.RelaySignerService)
 	err := relaySignerService.Init(config)
@@ -67,6 +75,14 @@ func getConfigFromFile() *model.Config {
 	if err := v.Unmarshal(&c); err != nil {
 		log.GeneralLogger.Printf("couldn't read config: %s", err)
 		os.Exit(1)
+	}
+	// Los bloques [reorder], [dashboard] y [log] se leen aparte, clave por clave: un valor
+	// invalido en cualquiera de ellos cae a su default y se registra, pero no aborta el arranque.
+	var discarded []model.DiscardedKey
+	c.Reorder, c.Dashboard, c.Log, discarded = model.LoadRuntimeBlocks(v)
+	for _, key := range discarded {
+		log.GeneralLogger.Printf("config: se descarto %s = %v (%s), se usa el valor por defecto",
+			key.Key, key.Value, key.Reason)
 	}
 	log.GeneralLogger.Printf("smartContract=%s AgentKey=%s\n", c.Application.ContractAddress, c.KeyStore.Agent)
 	return &c
