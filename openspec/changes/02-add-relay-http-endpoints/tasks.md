@@ -1,6 +1,6 @@
 ## 1. Ruteo por path
 
-- [ ] 1.1 Registrar las rutas nuevas por su path y comprobar el metodo dentro del handler segun D1,
+- [x] 1.1 Registrar las rutas nuevas por su path y comprobar el metodo dentro del handler segun D1,
   y verificar con un test la tabla de esa decision: `POST /info`, `GET /relay` y
   `POST /nonce/{address}` responden `405` y no los atiende el camino JSON-RPC
 - [x] 1.2 Registrar `/nonce/` como subarbol y verificar con tests que una peticion sin direccion
@@ -57,34 +57,34 @@
 
 ## 5. `POST /relay`
 
-- [ ] 5.1 Aceptar la transaccion firmada bajo su nombre principal y bajo el alias, y verificar con
+- [x] 5.1 Aceptar la transaccion firmada bajo su nombre principal y bajo el alias, y verificar con
   tests que un cuerpo sin transaccion o con algo que no es hexadecimal responde `400` indicando lo
   que se esperaba, sin consultar la cadena
-- [ ] 5.2 Relayar usando lo extraido en la seccion 2, y verificar con un test que una metatx que
+- [x] 5.2 Relayar usando lo extraido en la seccion 2, y verificar con un test que una metatx que
   `POST /` rechaza se rechaza aqui por el mismo motivo
-- [ ] 5.3 Esperar el resultado por sondeo, fuera del lock del cupo de gas segun D3, y verificar con
+- [x] 5.3 Esperar el resultado por sondeo, fuera del lock del cupo de gas segun D3, y verificar con
   un test que varias esperas simultaneas no se bloquean entre si
-- [ ] 5.4 Responder el resultado decodificado de la metatx con los campos del spec, tomando la
+- [x] 5.4 Responder el resultado decodificado de la metatx con los campos del spec, tomando la
   direccion desplegada del evento del hub y no del receipt, y verificar con tests una llamada a un
   contrato y un deploy
-- [ ] 5.5 Responder con el codigo de una respuesta correcta cuando el contrato destino revierte,
+- [x] 5.5 Responder con el codigo de una respuesta correcta cuando el contrato destino revierte,
   informando que no se ejecuto y el motivo, y verificar con un test que no se confunde con un
   rechazo del relay
-- [ ] 5.6 Informar el codigo de error del hub y su nombre cuando el hub rechaza la metatx, y
+- [x] 5.6 Informar el codigo de error del hub y su nombre cuando el hub rechaza la metatx, y
   verificar con un test que usa la misma traduccion del enum que ya existe
-- [ ] 5.7 Responder `400` con motivo, codigo y detalle usando el catalogo de D5, y verificar con
+- [x] 5.7 Responder `400` con motivo, codigo y detalle usando el catalogo de D5, y verificar con
   tests un rechazo por transaccion indecodificable, uno por sender no permitido y uno sin codigo
   propio que caiga en el generico
-- [ ] 5.8 Responder el vencimiento de la espera con su codigo propio y el hash de la metatx, y
+- [x] 5.8 Responder el vencimiento de la espera con su codigo propio y el hash de la metatx, y
   verificar con un test que se distingue de un rechazo y que la metatx sigue su curso
-- [ ] 5.9 Verificar con un test que una metatx relayada por esta ruta emite los mismos eventos de
+- [x] 5.9 Verificar con un test que una metatx relayada por esta ruta emite los mismos eventos de
   operacion que por el camino JSON-RPC, con la misma correlacion por peticion y por metatx
 
 ## 6. Verificacion de cierre
 
-- [ ] 6.1 Correr `go test ./... -race` y verificar que pasa, con atencion a las esperas concurrentes
+- [x] 6.1 Correr `go test ./... -race` y verificar que pasa, con atencion a las esperas concurrentes
   de `POST /relay` y al lock del cupo de gas
-- [ ] 6.2 Verificar que mientras varias peticiones a `POST /relay` esperan su receipt, el camino
+- [x] 6.2 Verificar que mientras varias peticiones a `POST /relay` esperan su receipt, el camino
   JSON-RPC sigue respondiendo con normalidad
 - [ ] 6.3 Verificar contra el binario anterior que las respuestas de `POST /` son identicas,
   comparando cuerpo y codigo de error para un caso exitoso y uno rechazado

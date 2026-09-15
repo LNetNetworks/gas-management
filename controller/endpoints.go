@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"encoding/json"
 	"math/big"
 	"net/http"
 
 	log "github.com/LACNetNetworks/gas-relay-signer/audit"
+	"github.com/LACNetNetworks/gas-relay-signer/service"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -85,4 +87,66 @@ func merge(base, extra map[string]interface{}) map[string]interface{} {
 		base[key] = value
 	}
 	return base
+}
+
+// --------------------------------------------------------------------------- POST /relay
+
+// relayRequest es el cuerpo de `POST /relay`. Se acepta el nombre principal y el alias, para que un
+// cliente escrito contra el relayer de referencia funcione sin cambios.
+type relayRequest struct {
+	RawTx             string `json:"rawTx"`
+	SignedTransaction string `json:"signedTransaction"`
+}
+
+func (request relayRequest) transaction() string {
+	if request.RawTx != "" {
+		return request.RawTx
+	}
+	return request.SignedTransaction
+}
+
+// Relay atiende `POST /relay`: relaya una metatx y responde recien cuando se sabe como termino.
+//
+// Comparte con `POST /` el decodificado, las validaciones y el envio, asi que las dos puertas
+// aceptan y rechazan exactamente las mismas metatx. Ver design.md, D4.
+func (controller *RelayController) Relay(w http.ResponseWriter, r *http.Request) {
+	ctx := log.WithMetaTxID(log.WithRequestID(r.Context(), log.NewRequestID()), log.NewMetaTxID())
+
+	var request relayRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		log.Warn(ctx, "relay.bad_request", log.ErrorFields(err))
+		writeError(w, http.StatusBadRequest, `se esperaba {"`+service.FieldRawTx+`": "0x..."}`, "", nil)
+		return
+	}
+
+	rawTx := request.transaction()
+	if !service.IsHexData(rawTx) {
+		// Se rechaza antes de tocar la cadena: un cuerpo mal formado no cuesta una llamada al nodo.
+		log.Warn(ctx, "relay.bad_request", map[string]interface{}{
+			"reason": "falta la transaccion firmada o no es hexadecimal",
+		})
+		writeError(w, http.StatusBadRequest,
+			`se esperaba {"`+service.FieldRawTx+`": "0x..."} (tambien se acepta "`+service.FieldAlias+`")`,
+			"", nil)
+		return
+	}
+
+	result, err := controller.RelaySignerService.RelayAndWait(ctx, rawTx)
+	if err != nil {
+		// El detalle ya salio en relay.rejected; aca solo queda la forma de la respuesta.
+		log.Warn(ctx, "relay.rejected", log.ErrorFields(err))
+		writeError(w, http.StatusBadRequest, err.Error(), service.CodeOf(err), detailsOf(err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// detailsOf expone el detalle adicional de un rechazo cuando lo hay. El vencimiento de la espera
+// lleva el hash, para que el cliente consulte la metatx en lugar de reenviarla.
+func detailsOf(err error) interface{} {
+	if service.CodeOf(err) != service.CodeReceiptTimeout {
+		return nil
+	}
+	return map[string]interface{}{"sent": true}
 }

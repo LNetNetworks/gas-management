@@ -21,6 +21,7 @@ import (
 func (controller *RelayController) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/", controller.SignTransaction)
 	mux.HandleFunc("/info", onlyMethod(http.MethodGet, controller.Info))
+	mux.HandleFunc("/relay", onlyMethod(http.MethodPost, controller.Relay))
 	// Subarbol y no comodin: `{address}` no coincide con `/nonce/` a secas, asi que una peticion
 	// sin direccion caeria al catch-all en lugar de dar el 400 que corresponde. Ver D2.
 	mux.HandleFunc("/nonce/", onlyMethod(http.MethodGet, controller.Nonce))

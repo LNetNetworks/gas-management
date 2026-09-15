@@ -45,9 +45,21 @@ var deferredEvents = map[string]bool{
 	"relay.settled": true, "relay.settle_failed": true,
 }
 
+// mockNodeOptions son las variantes del nodo simulado que hacen falta para probar los rechazos.
+type mockNodeOptions struct {
+	// senderNotPermitted hace que el contrato de reglas responda que el sender no esta permitido.
+	senderNotPermitted bool
+	// tinyGasLimit deja el cupo del nodo por debajo de lo que pide cualquier metatx.
+	tinyGasLimit bool
+}
+
 // mockNode responde las llamadas RPC que hace el camino de relay completo.
-func mockNode(t *testing.T, relayHub common.Address, receipt string) *httptest.Server {
+func mockNode(t *testing.T, relayHub common.Address, receipt string, options ...mockNodeOptions) *httptest.Server {
 	t.Helper()
+	var opts mockNodeOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
 	abiWord := func(hexValue string) string {
 		return "0x" + strings.Repeat("0", 64-len(hexValue)) + hexValue
 	}
@@ -72,7 +84,7 @@ func mockNode(t *testing.T, relayHub common.Address, receipt string) *httptest.S
 		// a todos produce valores que el decodificador rechaza -un booleano tiene que ser 0 o 1- o
 		// que no tienen sentido -un nonce de mil millones-.
 		case strings.Contains(request, `"eth_call"`):
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + ethCallResult(request) + `"}`))
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + ethCallResult(request, opts) + `"}`))
 		case strings.Contains(request, `"eth_getTransactionCount"`):
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x6"}`))
 		case strings.Contains(request, `"eth_sendRawTransaction"`):
@@ -103,7 +115,7 @@ const (
 const nonceOnChain = 345
 
 // ethCallResult responde cada consulta segun su selector, como haria un nodo real.
-func ethCallResult(request string) string {
+func ethCallResult(request string, opts mockNodeOptions) string {
 	abiWord := func(hexValue string) string {
 		return "0x" + strings.Repeat("0", 64-len(hexValue)) + hexValue
 	}
@@ -113,8 +125,14 @@ func ethCallResult(request string) string {
 	case strings.Contains(request, selectorAccountPermitted):
 		// Un booleano ABI tiene que ser exactamente 0 o 1: cualquier otro valor lo rechaza el
 		// decodificador y el campo termina sin valor.
+		if opts.senderNotPermitted {
+			return abiWord("0")
+		}
 		return abiWord("1")
 	case strings.Contains(request, selectorCurrentGasLimit), strings.Contains(request, selectorNodeGasLimit):
+		if opts.tinyGasLimit {
+			return abiWord("1")
+		}
 		// Cupo generoso, para que la metatx pase la verificacion y llegue al envio.
 		return abiWord("3b9aca00")
 	}
