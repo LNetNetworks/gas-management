@@ -93,17 +93,28 @@ func (service *RelaySignerService) waitForReceipt(ctx context.Context, hash comm
 	ticker := time.NewTicker(receiptPollInterval)
 	defer ticker.Stop()
 
+	// El ultimo error del sondeo se conserva para el mensaje del vencimiento. Un fallo aislado no
+	// interrumpe la espera -el nodo puede tardar o parpadear-, pero si la espera vence habiendo
+	// fallado siempre, decirlo distingue "todavia no se mino" de "el nodo responde algo ilegible".
+	var lastErr error
+
 	for {
 		receipt, err := client.GetTransactionReceipt(hash)
 		if err == nil && receipt != nil {
 			return receipt, nil
 		}
+		if err != nil {
+			lastErr = err
+		}
 
 		select {
 		case <-deadline:
-			return nil, errors.New(
-				"the metatx was sent but its result was not known within "+timeout.String()+
-					": consult the receipt for "+hash.Hex(), -32603)
+			message := "the metatx was sent but its result was not known within " + timeout.String() +
+				": consult the receipt for " + hash.Hex()
+			if lastErr != nil {
+				message += " (last error: " + lastErr.Error() + ")"
+			}
+			return nil, errors.New(message, -32603)
 		case <-ctx.Done():
 			return nil, errors.New("the client stopped waiting for "+hash.Hex(), -32603)
 		case <-ticker.C:

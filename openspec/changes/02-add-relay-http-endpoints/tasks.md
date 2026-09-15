@@ -86,9 +86,9 @@
   de `POST /relay` y al lock del cupo de gas
 - [x] 6.2 Verificar que mientras varias peticiones a `POST /relay` esperan su receipt, el camino
   JSON-RPC sigue respondiendo con normalidad
-- [ ] 6.3 Verificar contra el binario anterior que las respuestas de `POST /` son identicas,
+- [x] 6.3 Verificar contra el binario anterior que las respuestas de `POST /` son identicas,
   comparando cuerpo y codigo de error para un caso exitoso y uno rechazado
-- [ ] 6.4 Verificar que el servicio arranca con el `config.toml` de una instalacion previa y que las
+- [x] 6.4 Verificar que el servicio arranca con el `config.toml` de una instalacion previa y que las
   rutas nuevas responden sin que haga falta configurar nada
-- [ ] 6.5 Comparar campo a campo la respuesta de las tres rutas contra la del relayer de Node, y
+- [x] 6.5 Comparar campo a campo la respuesta de las tres rutas contra la del relayer de Node, y
   documentar en el README las diferencias que queden y por que

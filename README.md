@@ -69,6 +69,76 @@ Compilado en el tag `v1.1.0` reporta `v1.1.0`; en `develop` sin tag, algo como
    gh release create v1.1.0 gas-relay-signer --title "v1.1.0" --notes "..."
    ```
 
+## Rutas HTTP
+
+Ademas del catch-all JSON-RPC de `POST /`, que no cambia, el servicio expone tres rutas REST.
+
+**No son alcanzables por el puerto 80**: el nginx del writer node enruta por metodo leyendo el
+cuerpo, asi que quedan en el puerto del servicio (`:9001`), accesible por la red interna o por un
+tunel SSH. Abrirlas exige tocar la plantilla de `besu-networks`. Como el resto del servicio, no
+piden autenticacion: `GET /info` revela direcciones y el balance del nodo, y `POST /relay` consume
+su cupo de gas igual que el camino JSON-RPC.
+
+```bash
+curl -s http://localhost:9001/info
+curl -s http://localhost:9001/nonce/0xAbC...
+curl -s "http://localhost:9001/nonce/0xAbC...?peek=true"
+curl -s -X POST http://localhost:9001/relay \
+  -H 'content-type: application/json' -d '{"rawTx":"0xf8aa..."}'   # tambien acepta "signedTransaction"
+```
+
+### `GET /info`
+
+Devuelve que direcciones esta usando este nodo, de donde salio cada una y con que parametros esta
+operando. De aca sale el `relayHubProxyAddress` que va como `trustedForwarder` de los contratos.
+
+Un dato que no se puede obtener se informa **sin valor** en lugar de omitirse, y la ruta responde
+igual: es a la que se acude cuando algo anda mal, asi que no puede ser la primera en caerse.
+
+### `GET /nonce/{address}`
+
+`{address, nonce, nonceHex, nextNonce, nextNonceHex, pending}`. `nonce` es lo que dice el RelayHub;
+`nextNonce` es con lo que hay que firmar ahora, contando las metatx ya relayadas y todavia sin
+minarse. Encadenar sin `nextNonce` produce nonces repetidos.
+
+`?peek=true` pide consultar sin reservar. Se acepta desde ahora para que un cliente escrito contra
+el relayer de Node funcione sin cambios, pero **hoy no cambia la respuesta**: este servicio todavia
+no reserva nonces.
+
+### `POST /relay`
+
+Relaya la metatx y responde recien cuando se sabe como termino. Recorre exactamente las mismas
+validaciones que `POST /`.
+
+Un revert del contrato destino se responde con codigo de exito y `executed: false`: la metatx **si**
+se relayo, lo que fallo fue el destino. Un rechazo responde `400` con `{error, code, details}`.
+
+El vencimiento de la espera responde `RECEIPT_TIMEOUT` con el hash: la metatx **se envio** y puede
+minarse despues. Tratarlo como un rechazo y reenviarla produce un nonce repetido.
+
+### Diferencias con el relayer de Node
+
+Las rutas son compatibles campo a campo salvo por lo siguiente, que viene de capacidades que este
+servicio todavia no tiene:
+
+| Campo | Node | Aca | Por que |
+|---|---|---|---|
+| `minExpirationSeconds`, `expirationToleranceSeconds` (`/info`) | la ventana exigida | siempre `0` | este servicio no valida la expiracion del modelo de gas |
+| `autoNonce`, `autoNonceTicketMs` (`/info`) | segun configuracion | `false` y `0` | no hay reserva de nonces |
+| `relayHubSource` (`/info`) | `config` o `proxy` | siempre `proxy` | la direccion siempre se resuelve del proxy |
+| `reorderEnabled`, `receiptTimeoutMs` (`/info`) | no existen | presentes | parametros propios de este servicio |
+| `pending` (`/nonce`) | del tracker de lo en vuelo | del cache de nonces | el tracker autoritativo llega con el reordenamiento |
+| `peek` (`/nonce`) | evita reservar | sin efecto | no hay reserva que evitar |
+| `simulated` (`/relay`) | segun hubo pre-chequeo | siempre `false` | no hay pre-chequeo por simulacion con `eth_call` |
+| `errorCode` (`/relay`) | de la simulacion o del hub | solo del hub | idem |
+| `output` (`/relay`) | return data, o el motivo del revert | el motivo del revert, o sin valor | el return data de una llamada exitosa todavia no se expone |
+
+De los trece codigos de error del catalogo de Node, este servicio produce siete: `BAD_RAW_TX`,
+`BAD_META_TX`, `SENDER_NOT_PERMITTED`, `PERMISSIONING_UNAVAILABLE`, `SEND_FAILED`,
+`RECEIPT_TIMEOUT` y `RELAY_ERROR`. Los demas corresponden a validaciones que no existen todavia
+(expiracion, direccion del nodo, simulacion) o al tracker de nonces. Lo que no tiene codigo propio
+usa `RELAY_ERROR`: no se inventan codigos fuera del catalogo.
+
 ## Know More
 
 * [In depth overview of the GAS distribution mechanism](https://github.com/LACNetNetworks/gas-management/blob/master/docs/OVERVIEW.md)
