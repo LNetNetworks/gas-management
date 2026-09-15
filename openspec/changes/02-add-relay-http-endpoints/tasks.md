@@ -3,56 +3,56 @@
 - [ ] 1.1 Registrar las rutas nuevas por su path y comprobar el metodo dentro del handler segun D1,
   y verificar con un test la tabla de esa decision: `POST /info`, `GET /relay` y
   `POST /nonce/{address}` responden `405` y no los atiende el camino JSON-RPC
-- [ ] 1.2 Registrar `/nonce/` como subarbol y verificar con tests que una peticion sin direccion
+- [x] 1.2 Registrar `/nonce/` como subarbol y verificar con tests que una peticion sin direccion
   responde `400` y que `/nonce` sin barra final redirige a `/nonce/`
-- [ ] 1.3 Verificar con un test que ningun path que hoy llega al catch-all dejo de llegar: la raiz,
+- [x] 1.3 Verificar con un test que ningun path que hoy llega al catch-all dejo de llegar: la raiz,
   un metodo JSON-RPC cualquiera y un path desconocido siguen atendiendose como antes
-- [ ] 1.4 Verificar que `POST /` responde igual que antes de esta capacidad, comparando cuerpo y
+- [x] 1.4 Verificar que `POST /` responde igual que antes de esta capacidad, comparando cuerpo y
   codigo de error para un caso exitoso y uno rechazado
 
 ## 2. Extraccion del decodificado y las validaciones
 
-- [ ] 2.1 Extraer a `service/` el camino que va de la raw tx a la metatx lista para enviar
+- [x] 2.1 Extraer a `service/` el camino que va de la raw tx a la metatx lista para enviar
   —decodificar, comprobar la firma, exigir pre-EIP155, resolver el emisor, chequear permisos y
   calcular el limite de gas—, sin que lo extraido escriba respuestas ni conozca HTTP, y verificar
   que `go build ./...` y `go test ./...` siguen en verde
-- [ ] 2.2 Devolver desde lo extraido un error tipado que cada handler pueda presentar en su propio
+- [x] 2.2 Devolver desde lo extraido un error tipado que cada handler pueda presentar en su propio
   vocabulario, y verificar con un test que del mismo error salen la respuesta JSON-RPC con codigo
   numerico y la respuesta REST con codigo simbolico
-- [ ] 2.3 Acotar explicitamente el lock del cupo de gas a la reserva y el envio segun D3, en lugar
+- [x] 2.3 Acotar explicitamente el lock del cupo de gas a la reserva y el envio segun D3, en lugar
   de heredarlo de un `defer` a nivel de funcion, y verificar con un test que dos envios concurrentes
   siguen reservando de forma atomica
-- [ ] 2.4 Hacer que `processRawTransaction` use lo extraido y verificar contra el binario anterior
+- [x] 2.4 Hacer que `processRawTransaction` use lo extraido y verificar contra el binario anterior
   que las respuestas del camino JSON-RPC no cambiaron
 
 ## 3. `GET /info`
 
-- [ ] 3.1 Agregar al cliente la consulta del identificador de cadena y del balance de la cuenta del
+- [x] 3.1 Agregar al cliente la consulta del identificador de cadena y del balance de la cuenta del
   nodo, y verificar con tests contra un nodo simulado que ambos se leen
-- [ ] 3.2 Responder la identidad y las direcciones —nodo, RelayHub, proxy, cadena y URL del nodo—
+- [x] 3.2 Responder la identidad y las direcciones —nodo, RelayHub, proxy, cadena y URL del nodo—
   incluido el origen de la direccion del RelayHub, y verificar con un test que aparecen todos
-- [ ] 3.3 Responder el balance de la cuenta del nodo y el cupo de gas vigente, y verificar con un
+- [x] 3.3 Responder el balance de la cuenta del nodo y el cupo de gas vigente, y verificar con un
   test que salen del nodo y no de la configuracion
-- [ ] 3.4 Responder el estado del permisionado y verificar con tests los dos casos: deshabilitado
+- [x] 3.4 Responder el estado del permisionado y verificar con tests los dos casos: deshabilitado
   no consulta el contrato de reglas, y habilitado informa su direccion y si el nodo esta permitido
-- [ ] 3.5 Responder los parametros de operacion vigentes y verificar con un test que son los que el
+- [x] 3.5 Responder los parametros de operacion vigentes y verificar con un test que son los que el
   servicio esta usando, y no los del archivo cuando alguna clave fue descartada por invalida
-- [ ] 3.6 Informar sin valor el campo que no se pudo obtener, en lugar de omitirlo, y verificar con
+- [x] 3.6 Informar sin valor el campo que no se pudo obtener, en lugar de omitirlo, y verificar con
   un test que una consulta a la cadena que falla deja el resto de la respuesta completa y con el
   codigo de estado de una respuesta correcta
 
 ## 4. `GET /nonce/{address}`
 
-- [ ] 4.1 Responder el nonce en la cadena y el proximo a usar, cada uno en decimal y hexadecimal, y
+- [x] 4.1 Responder el nonce en la cadena y el proximo a usar, cada uno en decimal y hexadecimal, y
   verificar con tests que difieren cuando hay metatx en vuelo y coinciden cuando no las hay
-- [ ] 4.2 Responder cuantas metatx de esa direccion estan en vuelo, y verificar con un test que el
+- [x] 4.2 Responder cuantas metatx de esa direccion estan en vuelo, y verificar con un test que el
   valor refleja lo que el servicio relayo y todavia no resolvio
-- [ ] 4.3 Aceptar el parametro de consulta sin reserva segun D7, y verificar con un test que la
+- [x] 4.3 Aceptar el parametro de consulta sin reserva segun D7, y verificar con un test que la
   respuesta es la misma con y sin el, y que un valor no reconocido se trata como no pedido
-- [ ] 4.4 Rechazar con `400` una direccion ausente o mal formada sin consultar la cadena, y
+- [x] 4.4 Rechazar con `400` una direccion ausente o mal formada sin consultar la cadena, y
   verificar con tests que la misma direccion en minusculas y con mayusculas de checksum devuelve
   los mismos nonces
-- [ ] 4.5 Verificar con un test que el proximo nonce que informa esta ruta es el mismo que responde
+- [x] 4.5 Verificar con un test que el proximo nonce que informa esta ruta es el mismo que responde
   `eth_getTransactionCount` en estado pendiente para la misma direccion
 
 ## 5. `POST /relay`

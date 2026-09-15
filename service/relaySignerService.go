@@ -101,25 +101,53 @@ func (service *RelaySignerService) Init(_config *model.Config) error {
 
 // SendMetatransaction to blockchain
 func (service *RelaySignerService) SendMetatransaction(ctx context.Context, id json.RawMessage, to *common.Address, gasLimit uint64, signingData []byte, v uint8, r, s [32]byte, sender string, nonce uint64) *rpc.JsonrpcMessage {
+	hash, err := service.sendPrepared(ctx, &PreparedMetaTx{
+		From:           common.HexToAddress(sender),
+		To:             to,
+		SigningData:    signingData,
+		V:              v,
+		R:              r,
+		S:              s,
+		Nonce:          nonce,
+		MetaTxGasLimit: gasLimit,
+		IsDeploy:       to == nil,
+		SenderKey:      sender,
+	})
+	if err != nil {
+		return HandleError(ctx, id, err)
+	}
+
+	result := new(rpc.JsonrpcMessage)
+	result.ID = id
+	return result.Response(&hash)
+}
+
+// sendPrepared envuelve la metatx, la firma con la clave del nodo y la difunde. Devuelve el hash de
+// la transaccion envolvente.
+//
+// Es el unico punto de envio: lo comparten el camino JSON-RPC y el sincronico, asi que los dos
+// emiten el mismo relay.sent y recuerdan la correlacion de la misma forma.
+func (service *RelaySignerService) sendPrepared(ctx context.Context, prepared *PreparedMetaTx) (common.Hash, error) {
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
-		return HandleError(ctx, id, err)
+		return common.Hash{}, err
 	}
 	defer client.Close()
 
 	privateKey, err := crypto.HexToECDSA(service.Config.Application.Key)
 	if err != nil {
-		HandleError(ctx, id, err)
+		return common.Hash{}, err
 	}
 
-	optionsSendTransaction, err := client.ConfigTransaction(privateKey, gasLimit, true)
+	optionsSendTransaction, err := client.ConfigTransaction(privateKey, prepared.MetaTxGasLimit, true)
 	if err != nil {
-		return HandleError(ctx, id, err)
+		return common.Hash{}, err
 	}
-	tx, err := client.SendMetatransaction(*service.Config.Application.RelayHubContractAddress, optionsSendTransaction, to, signingData, v, r, s)
+	tx, err := client.SendMetatransaction(*service.Config.Application.RelayHubContractAddress,
+		optionsSendTransaction, prepared.To, prepared.SigningData, prepared.V, prepared.R, prepared.S)
 	if err != nil {
-		return HandleError(ctx, id, err)
+		return common.Hash{}, err
 	}
 
 	// La respuesta al cliente sigue siendo el hash y nada mas: el cliente recibe exactamente lo
@@ -132,16 +160,16 @@ func (service *RelaySignerService) SendMetatransaction(ctx context.Context, id j
 
 	log.GeneralLogger.Println("transaction", &transactionHash)
 
-	service.incrementTransactionCount(sender, nonce)
+	service.incrementTransactionCount(prepared.SenderKey, prepared.Nonce)
 
 	log.Info(ctx, "relay.sent", map[string]interface{}{
 		"transactionHash": transactionHash.Hex(),
 		// El nonce del hub para este usuario, que es el que trae firmado la metatx.
-		"hubNonce": nonce,
+		"hubNonce": prepared.Nonce,
 		// El nonce de la CUENTA del writer node: es el que traba el txpool si algo se pierde, y
 		// el unico dato con el que se puede desatascar la cola desde el nodo.
 		"writerNodeNonce": tx.Nonce(),
-		"metaTxGasLimit":  gasLimit,
+		"metaTxGasLimit":  prepared.MetaTxGasLimit,
 		// Campos del contrato que este servicio todavia no calcula. Se emiten sin valor en lugar
 		// de omitirse, para que la vista distinga "no aplica" de "no se emitio". Ver D13.
 		"simulated":              nil,
@@ -149,10 +177,7 @@ func (service *RelaySignerService) SendMetatransaction(ctx context.Context, id j
 		"pendingForUser":         nil,
 	})
 
-	result := new(rpc.JsonrpcMessage)
-
-	result.ID = id
-	return result.Response(&transactionHash)
+	return transactionHash, nil
 }
 
 // GetTransactionReceipt from blockchain
