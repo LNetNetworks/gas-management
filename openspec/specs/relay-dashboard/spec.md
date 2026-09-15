@@ -1,10 +1,11 @@
-## Purpose
+# relay-dashboard Specification
 
+## Purpose
 Ver en vivo lo que le pasa a cada metatx mientras pasa, en lugar de reconstruirlo despues leyendo
 un archivo de log. Es la herramienta con la que se diagnostica el reordenamiento de nonces: sin
 ella, validar por que una metatx se retuvo y cuanto es leer lineas a mano.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: El monitor esta apagado por defecto
 
@@ -93,14 +94,17 @@ la vista con un hueco silencioso, que es justo cuando el monitor importa.
 - **THEN** recibe todo lo retenido, sin error
 - **AND** el salto en la numeracion deja visible que hubo un hueco
 
-### Requirement: La conexion sobrevive a los intermediarios
+### Requirement: La conexion sobrevive a los cortes por tiempo
 
 El stream SHALL emitir periodicamente una senal que mantenga viva la conexion, y SHALL pedir a los
-intermediarios que no la almacenen en memoria intermedia.
+intermediarios que no la almacenen en memoria intermedia. El limite de tiempo de escritura que el
+servicio le aplica a toda respuesta MUST NOT aplicar a esta conexion.
 
 Sin lo primero, un proxy que corta por inactividad tira la conexion cuando no hay metatx. Sin lo
 segundo, un proxy con almacenamiento intermedio retiene el flujo y a la pagina no llega nada,
-aunque todo lo demas funcione.
+aunque todo lo demas funcione. Sin lo tercero, el corte no viene de afuera sino del propio
+servicio: un flujo dura, a proposito, mucho mas que una respuesta normal, y ese limite -que existe
+para que un cliente lento no retenga una conexion- lo mata cada tantos minutos.
 
 #### Scenario: Un periodo sin eventos
 
@@ -112,6 +116,14 @@ aunque todo lo demas funcione.
 
 - **WHEN** el stream atraviesa un proxy que almacena respuestas
 - **THEN** la respuesta indica que no debe almacenarse ni transformarse
+
+#### Scenario: El limite de escritura del servicio
+
+- **WHEN** el stream sigue abierto mas alla del limite de escritura que el servicio le aplica a sus
+  respuestas
+- **THEN** la conexion sigue viva
+- **AND** los eventos posteriores llegan por esa misma conexion, sin que el observador tenga que
+  reconectar
 
 ### Requirement: Cantidad de observadores acotada
 
