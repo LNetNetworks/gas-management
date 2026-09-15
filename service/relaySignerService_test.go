@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -89,7 +90,7 @@ func TestGetTransactionCount(t *testing.T) {
 	relayHubAddress := common.HexToAddress("0xdD37c69fF29C4b93A346Ed6dF184f48A71800b7E")
 	relaySignerService.Config.Application.RelayHubContractAddress = &relayHubAddress
 	relaySignerService.Config.Application.ContractAddress = "0xdD37c69fF29C4b93A346Ed6dF184f48A71800b7E"
-	jsonResponse := relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], false)
+	jsonResponse := relaySignerService.GetTransactionCount(context.Background(), rpcMessage.ID, params[0], false)
 
 	fmt.Println(jsonResponse)
 
@@ -118,7 +119,7 @@ func TestGetTransactionCountLatest(t *testing.T) {
 	relayHubAddress := common.HexToAddress("0xdD37c69fF29C4b93A346Ed6dF184f48A71800b7E")
 	relaySignerService.Config.Application.RelayHubContractAddress = &relayHubAddress
 	relaySignerService.Config.Application.ContractAddress = "0xdD37c69fF29C4b93A346Ed6dF184f48A71800b7E"
-	jsonResponse := relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], false)
+	jsonResponse := relaySignerService.GetTransactionCount(context.Background(), rpcMessage.ID, params[0], false)
 
 	fmt.Println(jsonResponse)
 
@@ -145,7 +146,7 @@ func TestGetTransactionCountPending(t *testing.T) {
 	_ = relaySignerService.Init(&config)
 	relaySignerService.senders = make(map[string]*nonceEntry)
 	relaySignerService.senders["0x92c9885663f6e84127c857d3137936c424b7e07555d2bc7d8bd781b3f0847ac8"] = &nonceEntry{next: 200, updatedAt: time.Now()}
-	jsonResponse := relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], true)
+	jsonResponse := relaySignerService.GetTransactionCount(context.Background(), rpcMessage.ID, params[0], true)
 
 	if jsonResponse.String() != `{"jsonrpc":"2.0","id":53,"result":"0xc8"}` {
 		t.Errorf("Incorrect nonce was gotten")
@@ -172,7 +173,7 @@ func TestGetTransactionCountPendingNoValue(t *testing.T) {
 	relaySignerService.Config.Application.RelayHubContractAddress = &relayHubAddress
 	relaySignerService.Config.Application.ContractAddress = "0xdD37c69fF29C4b93A346Ed6dF184f48A71800b7E"
 	relaySignerService.senders = make(map[string]*nonceEntry)
-	jsonResponse := relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], true)
+	jsonResponse := relaySignerService.GetTransactionCount(context.Background(), rpcMessage.ID, params[0], true)
 
 	if jsonResponse.String() != `{"jsonrpc":"2.0","id":53,"result":"0x159"}` {
 		t.Errorf("Incorrect nonce was gotten")
@@ -195,7 +196,7 @@ func TestGetTransactionReceipt(t *testing.T) {
 	config := model.Config{Application: applicationConfig}
 	relaySignerService := new(RelaySignerService)
 	_ = relaySignerService.Init(&config)
-	jsonResponse := relaySignerService.GetTransactionReceipt(rpcMessage.ID, params[0])
+	jsonResponse := relaySignerService.GetTransactionReceipt(context.Background(), rpcMessage.ID, params[0])
 
 	var result map[string]interface{}
 	json.Unmarshal([]byte(jsonResponse.String()), &result)
@@ -223,7 +224,7 @@ func TestGetTransactionReceiptRevertReason(t *testing.T) {
 	config := model.Config{Application: applicationConfig}
 	relaySignerService := new(RelaySignerService)
 	_ = relaySignerService.Init(&config)
-	jsonResponse := relaySignerService.GetTransactionReceipt(rpcMessage.ID, params[0])
+	jsonResponse := relaySignerService.GetTransactionReceipt(context.Background(), rpcMessage.ID, params[0])
 
 	var result map[string]interface{}
 	json.Unmarshal([]byte(jsonResponse.String()), &result)
@@ -255,7 +256,7 @@ func TestGetTransactionReceiptFailedDeploy(t *testing.T) {
 	config := model.Config{Application: applicationConfig}
 	relaySignerService := new(RelaySignerService)
 	_ = relaySignerService.Init(&config)
-	jsonResponse := relaySignerService.GetTransactionReceipt(rpcMessage.ID, params[0])
+	jsonResponse := relaySignerService.GetTransactionReceipt(context.Background(), rpcMessage.ID, params[0])
 
 	var result map[string]interface{}
 	json.Unmarshal([]byte(jsonResponse.String()), &result)
@@ -306,7 +307,7 @@ func TestSendMetatransaction(t *testing.T) {
 
 	sender := "0x92c9885663f6e84127c857d3137936c424b7e07555d2bc7d8bd781b3f0847ac8"
 
-	jsonResponse := relaySignerService.SendMetatransaction(rpcMessage.ID, &to, gasLimit, encodedFunction, 27, r, s, sender, 34)
+	jsonResponse := relaySignerService.SendMetatransaction(context.Background(), rpcMessage.ID, &to, gasLimit, encodedFunction, 27, r, s, sender, 34)
 
 	err := os.Remove("keyMock")
 	if err != nil {
@@ -360,12 +361,12 @@ func TestNonceAfterTransactions(t *testing.T) {
 	// nonce a usar (i+1) — no el recién consumido (comportamiento antiguo, que provocaba colisión
 	// inmediata del siguiente envío).
 	for i := 34; i < 45; i++ {
-		jsonResponse := relaySignerService.SendMetatransaction(rpcMessage.ID, &to, gasLimit, encodedFunction, 27, r, s, sender, uint64(i))
+		jsonResponse := relaySignerService.SendMetatransaction(context.Background(), rpcMessage.ID, &to, gasLimit, encodedFunction, 27, r, s, sender, uint64(i))
 		if jsonResponse.String() != `{"jsonrpc":"2.0","id":2914410858336929,"result":"0x9c2fb4956ce18491021a534106fe50e7cfe86bcc373b1626623fa0366f4cc3bc"}` {
 			t.Errorf("Incorrect transactionHash was gotten")
 		}
 
-		jsonResponseNonce := relaySignerService.GetTransactionCount(rpcMessage.ID, sender, true)
+		jsonResponseNonce := relaySignerService.GetTransactionCount(context.Background(), rpcMessage.ID, sender, true)
 
 		responseNonce := fmt.Sprintf(`{"jsonrpc":"2.0","id":2914410858336929,"result":"0x%x"}`, i+1)
 

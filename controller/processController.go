@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,37 +21,37 @@ import (
 const PENDING = "PENDING"
 const LATEST = "LATEST"
 
-func processGetTransactionReceipt(relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
+func processGetTransactionReceipt(ctx context.Context, relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
 	log.GeneralLogger.Println("Is getTransactionReceipt")
 	var params []string
 	err := json.Unmarshal(rpcMessage.Params, &params)
 	if err != nil {
 		log.GeneralLogger.Println(err)
 		err := errors.New("internal error")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
-	response := relaySignerService.GetTransactionReceipt(rpcMessage.ID, params[0][2:])
+	response := relaySignerService.GetTransactionReceipt(ctx, rpcMessage.ID, params[0][2:])
 	data, err := json.Marshal(response)
 	if err != nil {
 		log.GeneralLogger.Println(err)
 		err := errors.New("internal error")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 	w.Write(data)
 }
 
-func processTransactionCount(relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
+func processTransactionCount(ctx context.Context, relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
 	log.GeneralLogger.Println("Is getTransactionCount")
 	var params []string
 	err := json.Unmarshal(rpcMessage.Params, &params)
 	if err != nil {
 		log.GeneralLogger.Println(err)
 		err := errors.New("internal error")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
@@ -59,62 +60,62 @@ func processTransactionCount(relaySignerService *service.RelaySignerService, rpc
 
 	if len(params) > 1 {
 		if strings.ToUpper(params[1]) == PENDING {
-			response = relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], true)
+			response = relaySignerService.GetTransactionCount(ctx, rpcMessage.ID, params[0], true)
 		} else if strings.ToUpper(params[1]) == LATEST {
-			response = relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], false)
+			response = relaySignerService.GetTransactionCount(ctx, rpcMessage.ID, params[0], false)
 		} else {
 			err := errors.New("parameter not defined, only pending or latest are allowed")
-			data := handleError(rpcMessage.ID, err)
+			data := handleError(ctx, rpcMessage.ID, err)
 			w.Write(data)
 		}
 	} else {
-		response = relaySignerService.GetTransactionCount(rpcMessage.ID, params[0], false)
+		response = relaySignerService.GetTransactionCount(ctx, rpcMessage.ID, params[0], false)
 	}
 
 	data, err := json.Marshal(response)
 	if err != nil {
 		log.GeneralLogger.Println(err)
 		err := errors.New("internal error")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 	w.Write(data)
 }
 
-func processGetMetaTxResult(relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
+func processGetMetaTxResult(ctx context.Context, relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
 	log.GeneralLogger.Println("Is getMetaTxResult")
 	var params []string
 	err := json.Unmarshal(rpcMessage.Params, &params)
 	if err != nil || len(params) == 0 {
-		data := handleError(rpcMessage.ID, errors.New("invalid params: expected [txHash]"))
+		data := handleError(ctx, rpcMessage.ID, errors.New("invalid params: expected [txHash]"))
 		w.Write(data)
 		return
 	}
-	response := relaySignerService.GetMetaTxResult(rpcMessage.ID, params[0][2:])
+	response := relaySignerService.GetMetaTxResult(ctx, rpcMessage.ID, params[0][2:])
 	data, err := json.Marshal(response)
 	if err != nil {
 		log.GeneralLogger.Println(err)
-		data := handleError(rpcMessage.ID, errors.New("internal error"))
+		data := handleError(ctx, rpcMessage.ID, errors.New("internal error"))
 		w.Write(data)
 		return
 	}
 	w.Write(data)
 }
 
-func processRawTransaction(relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
+func processRawTransaction(ctx context.Context, relaySignerService *service.RelaySignerService, rpcMessage rpc.JsonrpcMessage, w http.ResponseWriter) {
 	log.GeneralLogger.Println("Is a rawTransaction")
 	var params []string
 	err := json.Unmarshal(rpcMessage.Params, &params)
 	if err != nil {
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 
 	decodeTransaction, err := service.GetTransaction(params[0][2:])
 	if err != nil {
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
@@ -122,7 +123,7 @@ func processRawTransaction(relaySignerService *service.RelaySignerService, rpcMe
 	v, rInt, sInt := decodeTransaction.RawSignatureValues()
 	if (v == nil) || (rInt == nil) || (sInt == nil) {
 		err := errors.New("bad signature ECDSA")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
@@ -132,28 +133,28 @@ func processRawTransaction(relaySignerService *service.RelaySignerService, rpcMe
 	// on-chain. Lo rechazamos temprano con un mensaje claro.
 	if vUint := v.Uint64(); vUint != 27 && vUint != 28 {
 		err := errors.New("transaction must be signed pre-EIP155 (chainId=0, v=27 or 28)")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 
 	message, err := decodeTransaction.AsMessage(types.NewEIP155Signer(decodeTransaction.ChainId()))
 	if err != nil {
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 
 	if relaySignerService.Config.Security.PermissionsEnabled {
-		isSenderPermitted, err := relaySignerService.VerifySender(message.From(), rpcMessage.ID)
+		isSenderPermitted, err := relaySignerService.VerifySender(ctx, message.From(), rpcMessage.ID)
 		if err != nil {
-			data := handleError(rpcMessage.ID, err)
+			data := handleError(ctx, rpcMessage.ID, err)
 			w.Write(data)
 			return
 		}
 		if !isSenderPermitted {
 			err := errors.New("account sender is not permitted to send transactions")
-			data := handleError(rpcMessage.ID, err)
+			data := handleError(ctx, rpcMessage.ID, err)
 			w.Write(data)
 			return
 		}
@@ -163,15 +164,15 @@ func processRawTransaction(relaySignerService *service.RelaySignerService, rpcMe
 
 	lock.Lock()
 	defer lock.Unlock()
-	isCorrectGasLimit, err := relaySignerService.VerifyGasLimit(metaTxGasLimit, rpcMessage.ID)
+	isCorrectGasLimit, err := relaySignerService.VerifyGasLimit(ctx, metaTxGasLimit, rpcMessage.ID)
 	if err != nil {
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 	if !isCorrectGasLimit {
 		err := errors.New("transaction gas limit exceeds block gas limit")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
@@ -205,17 +206,17 @@ func processRawTransaction(relaySignerService *service.RelaySignerService, rpcMe
 	signingDataRLP, err := rlp.EncodeToBytes(signingDataTx.Data)
 	if err != nil {
 		err := errors.New("internal error")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
 
-	response := relaySignerService.SendMetatransaction(rpcMessage.ID, decodeTransaction.To(), metaTxGasLimit, signingDataRLP, uint8(v.Uint64()), r, s, message.From().Hex(), decodeTransaction.Nonce())
+	response := relaySignerService.SendMetatransaction(ctx, rpcMessage.ID, decodeTransaction.To(), metaTxGasLimit, signingDataRLP, uint8(v.Uint64()), r, s, message.From().Hex(), decodeTransaction.Nonce())
 	data, err := json.Marshal(response)
 	if err != nil {
 		log.GeneralLogger.Println(err)
 		err := errors.New("internal error")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 	}
