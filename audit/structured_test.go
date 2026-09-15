@@ -321,3 +321,38 @@ func TestConcurrentEmissionDoesNotInterleave(t *testing.T) {
 		}
 	}
 }
+
+// TestDetachedContextSurvivesTheResponse cubre la tarea 4.4: un evento emitido despues de que el
+// handler retorno conserva la correlacion, y el trabajo desprendido no se aborta por eso.
+func TestDetachedContextSurvivesTheResponse(t *testing.T) {
+	out, _ := captureOutput(t)
+
+	// El ctx de la peticion, con su correlacion.
+	request, cancel := context.WithCancel(
+		WithMetaTxID(WithRequestID(context.Background(), "req-1"), "meta-1"))
+	detached := Detach(request)
+
+	// El handler retorna: el contexto de la peticion se cancela.
+	cancel()
+
+	if request.Err() == nil {
+		t.Fatal("el contexto de la peticion deberia estar cancelado tras retornar el handler")
+	}
+	if detached.Err() != nil {
+		t.Errorf("el contexto desprendido no debe cancelarse con la peticion: %v", detached.Err())
+	}
+	if detached.Done() != nil {
+		select {
+		case <-detached.Done():
+			t.Error("el contexto desprendido quedo cancelado")
+		default:
+		}
+	}
+
+	Info(detached, "relay.settled", map[string]interface{}{"blockNumber": 11184709})
+
+	line := decodeOneLine(t, out)
+	if line["reqId"] != "req-1" || line["metaTxId"] != "meta-1" {
+		t.Errorf("un evento posterior a la respuesta perdio la correlacion: %v", line)
+	}
+}

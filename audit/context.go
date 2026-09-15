@@ -42,3 +42,19 @@ func contextText(ctx context.Context, key contextKey) string {
 	}
 	return ""
 }
+
+// Detach devuelve un contexto que conserva la correlacion pero ya no se cancela con el original.
+//
+// Hace falta porque el ctx de una peticion HTTP se cancela cuando el handler retorna, y un evento
+// emitido despues -el resultado de una metatx que se resuelve mucho mas tarde- tiene que seguir
+// llevando el reqId y el metaTxId de la peticion que lo origino.
+//
+// Los valores de un contexto sobreviven a la cancelacion por si solos; lo que esto evita es que el
+// trabajo desprendido que use este contexto se aborte al responderle al cliente. Ver design.md, D2.
+//
+// Esto cubre el trabajo que se desprende DENTRO de una peticion. Cuando el evento nace en otra
+// peticion -el caso del receipt en este servicio- no hay ctx del que derivar y la correlacion se
+// recupera del mapa descrito en D11.
+func Detach(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}

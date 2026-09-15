@@ -103,23 +103,23 @@
 - [x] 5.7 Emitir `relay.hub_rejected` donde el servicio ya detecta `BadTransactionSent` e invalida
   el nonce del sender, con `transactionHash`, `from`, `errorCode` y el `errorCodeName` que ya
   traduce el servicio, y verificar con un test que lleva el `metaTxId` de la metatx original
-- [ ] 5.8 Agregar un test de contrato que recorra los eventos emitidos y falle si a alguno le falta
+- [x] 5.8 Agregar un test de contrato que recorra los eventos emitidos y falle si a alguno le falta
   `metaTxId` o cualquier campo de la tabla del spec, para que un renombrado no rompa la pagina en
   silencio
 
 ## 6. Verificacion de cierre
 
-- [ ] 6.1 Correr `go test ./... -race` y verificar que pasa, con atencion a las carreras entre la
+- [x] 6.1 Correr `go test ./... -race` y verificar que pasa, con atencion a las carreras entre la
   publicacion y la suscripcion concurrentes, y entre la escritura y la lectura del mapa de
   correlacion
-- [ ] 6.2 Lanzar una rafaga por `POST /` y verificar que el bus contiene, por cada metatx, su
+- [x] 6.2 Lanzar una rafaga por `POST /` y verificar que el bus contiene, por cada metatx, su
   `relay.received`, su `relay.decoded` y luego su `relay.sent` o su `relay.rejected`, y que no
   aparece ningun `relay.held` ni `relay.turn`
-- [ ] 6.3 Verificar con `reorder.enabled = false` y `dashboard.enabled = false` que las respuestas
+- [x] 6.3 Verificar con `reorder.enabled = false` y `dashboard.enabled = false` que las respuestas
   del camino JSON-RPC son identicas a las del binario anterior, comparando cuerpo y codigo de error
   para un caso exitoso y uno rechazado
-- [ ] 6.4 Verificar que el servicio arranca y opera con el `config.toml` de produccion sin las
+- [x] 6.4 Verificar que el servicio arranca y opera con el `config.toml` de produccion sin las
   claves nuevas, y que la unica diferencia observable son las lineas JSON en la salida estandar
-- [ ] 6.5 Relayar una metatx que el hub rechace, consultar su receipt en una peticion posterior, y
+- [x] 6.5 Relayar una metatx que el hub rechace, consultar su receipt en una peticion posterior, y
   verificar que el `relay.hub_rejected` resultante queda asociado en el bus a la misma metatx que
   su `relay.received`, su `relay.decoded` y su `relay.sent`

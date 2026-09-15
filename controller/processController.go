@@ -173,8 +173,13 @@ func processRawTransaction(ctx context.Context, relaySignerService *service.Rela
 	// con su metaTxId en lugar de desaparecer. Ver design.md, D8.
 	if len(params) > 0 {
 		received := map[string]interface{}{
-			"rawTxHash":  service.RawTxHash(params[0]),
+			// Sin valor, y no cadena vacia, cuando la raw tx no es hexadecimal: es el mismo
+			// criterio que el resto de los campos que no tienen valor aplicable.
+			"rawTxHash":  nil,
 			"rawTxBytes": service.RawTxBytes(params[0]),
+		}
+		if hash := service.RawTxHash(params[0]); hash != "" {
+			received["rawTxHash"] = hash
 		}
 		if log.ShouldLogRawTx() {
 			received["rawTx"] = params[0]
