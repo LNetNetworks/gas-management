@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -33,13 +34,19 @@ func (controller *RelayController) Init(config *model.Config, relaySignerService
 
 // SignTransaction ...
 func (controller *RelayController) SignTransaction(w http.ResponseWriter, r *http.Request) {
+	// El reqId se genera ANTES de leer el cuerpo: asi una peticion con un cuerpo ilegible, que
+	// nunca llega a tener una metatx, tambien queda correlacionada en el log. Ver design.md, D8.
+	ctx := log.WithRequestID(r.Context(), log.NewRequestID())
 	w.Header().Set("Content-Type", "application/json")
 
 	//log.GeneralLogger.Println("Body:", r.Body)
 
 	buf, err := io.ReadAll(r.Body)
 	if err != nil {
-		handleError(nil, err)
+		// Se registra y se sigue exactamente como antes: cambiar este flujo cambiaria la
+		// respuesta que recibe el cliente, y este change no altera el contrato JSON-RPC.
+		log.Warn(ctx, "http.bad_body", log.ErrorFields(err))
+		handleError(ctx, nil, err)
 	}
 	rdr1 := io.NopCloser(bytes.NewBuffer(buf))
 	rdr2 := io.NopCloser(bytes.NewBuffer(buf))
@@ -50,6 +57,7 @@ func (controller *RelayController) SignTransaction(w http.ResponseWriter, r *htt
 
 	err = json.NewDecoder(rdr1).Decode(&rpcMessage)
 	if err != nil {
+		log.Warn(ctx, "http.bad_body", log.ErrorFields(err))
 		log.GeneralLogger.Println("Invalid params")
 		log.GeneralLogger.Println(err)
 		return
@@ -66,26 +74,26 @@ func (controller *RelayController) SignTransaction(w http.ResponseWriter, r *htt
 		r.Body = rdr2
 		log.GeneralLogger.Println("Is a private send Transaction, decrease gas used")
 
-		controller.RelaySignerService.DecreaseGasUsed(rpcMessage.ID)
+		controller.RelaySignerService.DecreaseGasUsed(ctx, rpcMessage.ID)
 
 		log.GeneralLogger.Println("forward to Besu->Orion")
 		serveReverseProxy(controller.Config.Application.NodeURL, w, r)
 	} else if rpcMessage.IsRawTransaction() {
-		processRawTransaction(controller.RelaySignerService, rpcMessage, w)
+		processRawTransaction(ctx, controller.RelaySignerService, rpcMessage, w)
 		return
 	} else if rpcMessage.IsGetTransactionReceipt() {
-		processGetTransactionReceipt(controller.RelaySignerService, rpcMessage, w)
+		processGetTransactionReceipt(ctx, controller.RelaySignerService, rpcMessage, w)
 		return
 	} else if rpcMessage.IsGetTransactionCount() {
-		processTransactionCount(controller.RelaySignerService, rpcMessage, w)
+		processTransactionCount(ctx, controller.RelaySignerService, rpcMessage, w)
 		return
 	} else if rpcMessage.IsGetMetaTxResult() {
-		processGetMetaTxResult(controller.RelaySignerService, rpcMessage, w)
+		processGetMetaTxResult(ctx, controller.RelaySignerService, rpcMessage, w)
 		return
 	} else {
 		//	r.Body=rdr2
 		err := errors.New("method is not supported")
-		data := handleError(rpcMessage.ID, err)
+		data := handleError(ctx, rpcMessage.ID, err)
 		w.Write(data)
 		return
 		//	serveReverseProxy(controller.Config.Application.NodeURL,w,r)
@@ -96,7 +104,7 @@ func serveReverseProxy(target string, res http.ResponseWriter, req *http.Request
 	// parse the url
 	url, err := url.Parse(target)
 	if err != nil {
-		handleError(nil, err)
+		handleError(req.Context(), nil, err)
 	}
 	// create the reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(url)
@@ -111,9 +119,9 @@ func serveReverseProxy(target string, res http.ResponseWriter, req *http.Request
 	proxy.ServeHTTP(res, req)
 }
 
-func handleError(messageID json.RawMessage, err error) []byte {
+func handleError(ctx context.Context, messageID json.RawMessage, err error) []byte {
 	//	log.GeneralLogger.Println(err)
-	data, err := json.Marshal(service.HandleError(messageID, err))
+	data, err := json.Marshal(service.HandleError(ctx, messageID, err))
 	if err != nil {
 		log.GeneralLogger.Println("Error trying to marshall a response to client")
 	}

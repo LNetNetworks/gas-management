@@ -15,3 +15,20 @@ agent = "Peru123."
 [security]
 permissionsEnabled = false
 accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
+
+# Bloques opcionales. Si no estan, el servicio arranca con estos mismos valores y ambas
+# capacidades quedan apagadas: descomentar solo lo que se quiera cambiar.
+
+# [reorder]
+# enabled = false             # retener una metatx adelantada hasta que se cierre el hueco de nonce
+# windowMs = 3000             # cuanto se espera, como maximo, a la que falta
+# maxInflightPerUser = 16     # tope de metatx en vuelo por usuario
+# receiptTimeoutMs = 60000    # cuanto se espera el receipt antes de soltar la retencion
+
+# [dashboard]
+# enabled = false             # publicar los eventos en el bus en memoria
+# bufferSize = 500            # eventos retenidos para el que se conecta tarde; 0 deja el bus inerte
+
+# [log]
+# level = "info"              # debug, info, warn o error: nivel minimo que se escribe en la salida
+# rawTx = false               # volcar la transaccion firmada completa (por defecto solo hash y tamano)

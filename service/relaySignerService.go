@@ -54,6 +54,10 @@ type RelaySignerService struct {
 	Config      *model.Config
 	senders     map[string]*nonceEntry
 	sendersLock sync.Mutex
+	// metaTx recuerda, por hash de la transaccion enviada, a que metatx pertenece. Sin esto un
+	// receipt consultado en otra peticion no se podria asociar a la metatx que lo origino.
+	metaTx     map[common.Hash]*metaTxEntry
+	metaTxLock sync.Mutex
 }
 
 // Init configuration parameters
@@ -79,6 +83,7 @@ func (service *RelaySignerService) Init(_config *model.Config) error {
 	service.Config.Application.Key = string(key[2:66])
 
 	service.senders = make(map[string]*nonceEntry)
+	service.metaTx = make(map[common.Hash]*metaTxEntry)
 
 	if service.Config.Security.PermissionsEnabled {
 		if !(common.IsHexAddress(service.Config.Security.AccountContractAddress)) {
@@ -95,50 +100,77 @@ func (service *RelaySignerService) Init(_config *model.Config) error {
 }
 
 // SendMetatransaction to blockchain
-func (service *RelaySignerService) SendMetatransaction(id json.RawMessage, to *common.Address, gasLimit uint64, signingData []byte, v uint8, r, s [32]byte, sender string, nonce uint64) *rpc.JsonrpcMessage {
+func (service *RelaySignerService) SendMetatransaction(ctx context.Context, id json.RawMessage, to *common.Address, gasLimit uint64, signingData []byte, v uint8, r, s [32]byte, sender string, nonce uint64) *rpc.JsonrpcMessage {
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
-		return HandleError(id, err)
+		return HandleError(ctx, id, err)
 	}
 	defer client.Close()
 
 	privateKey, err := crypto.HexToECDSA(service.Config.Application.Key)
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	optionsSendTransaction, err := client.ConfigTransaction(privateKey, gasLimit, true)
 	if err != nil {
-		return HandleError(id, err)
+		return HandleError(ctx, id, err)
 	}
 	tx, err := client.SendMetatransaction(*service.Config.Application.RelayHubContractAddress, optionsSendTransaction, to, signingData, v, r, s)
 	if err != nil {
-		return HandleError(id, err)
+		return HandleError(ctx, id, err)
 	}
 
-	log.GeneralLogger.Println("transaction", tx)
+	// La respuesta al cliente sigue siendo el hash y nada mas: el cliente recibe exactamente lo
+	// mismo que antes de que este metodo tuviera la transaccion entera a mano.
+	transactionHash := tx.Hash()
+
+	// Se recuerda a que metatx pertenece este hash: el receipt llega en otra peticion, donde no
+	// existe ningun metaTxId del que partir. Ver design.md, D11.
+	service.rememberMetaTx(ctx, transactionHash)
+
+	log.GeneralLogger.Println("transaction", &transactionHash)
 
 	service.incrementTransactionCount(sender, nonce)
+
+	log.Info(ctx, "relay.sent", map[string]interface{}{
+		"transactionHash": transactionHash.Hex(),
+		// El nonce del hub para este usuario, que es el que trae firmado la metatx.
+		"hubNonce": nonce,
+		// El nonce de la CUENTA del writer node: es el que traba el txpool si algo se pierde, y
+		// el unico dato con el que se puede desatascar la cola desde el nodo.
+		"writerNodeNonce": tx.Nonce(),
+		"metaTxGasLimit":  gasLimit,
+		// Campos del contrato que este servicio todavia no calcula. Se emiten sin valor en lugar
+		// de omitirse, para que la vista distinga "no aplica" de "no se emitio". Ver D13.
+		"simulated":              nil,
+		"simulatedErrorCodeName": nil,
+		"pendingForUser":         nil,
+	})
 
 	result := new(rpc.JsonrpcMessage)
 
 	result.ID = id
-	return result.Response(tx)
+	return result.Response(&transactionHash)
 }
 
 // GetTransactionReceipt from blockchain
-func (service *RelaySignerService) GetTransactionReceipt(id json.RawMessage, transactionID string) *rpc.JsonrpcMessage {
+func (service *RelaySignerService) GetTransactionReceipt(ctx context.Context, id json.RawMessage, transactionID string) *rpc.JsonrpcMessage {
+	// Los eventos que salgan de aca pertenecen a la metatx que produjo este hash, no a la
+	// peticion que vino a consultar el receipt. Ver design.md, D11.
+	ctx = service.recallMetaTx(ctx, common.HexToHash(transactionID))
+
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
-		return HandleError(id, err)
+		return HandleError(ctx, id, err)
 	}
 	defer client.Close()
 
 	receipt, err := client.GetTransactionReceipt(common.HexToHash(transactionID))
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	var receiptReverted map[string]interface{}
@@ -163,24 +195,24 @@ func (service *RelaySignerService) GetTransactionReceipt(id json.RawMessage, tra
 
 		var sawContractDeployed, sawTransactionRelayed, sawBadTransaction, sawRelayed bool
 
-		for _, log := range receipt.Logs {
-			if len(log.Topics) == 0 {
+		for _, lg := range receipt.Logs {
+			if len(lg.Topics) == 0 {
 				continue
 			}
-			switch log.Topics[0].Hex() {
+			switch lg.Topics[0].Hex() {
 			case "0x" + eventContractDeployed:
 				sawContractDeployed = true
-				receipt.ContractAddress = common.BytesToAddress(log.Data)
+				receipt.ContractAddress = common.BytesToAddress(lg.Data)
 			case "0x" + eventTransactionRelayed:
 				sawTransactionRelayed = true
-				executed, output := transactionRelayedFailed(id, log.Data)
+				executed, output := transactionRelayedFailed(ctx, id, lg.Data)
 				if !executed {
 					receipt.Status = uint64(0)
 					reason := decodeRevertReason(output)
 
 					jsonReceipt, err := json.Marshal(receipt)
 					if err != nil {
-						HandleError(id, err)
+						HandleError(ctx, id, err)
 					}
 
 					json.Unmarshal(jsonReceipt, &receiptReverted)
@@ -188,15 +220,16 @@ func (service *RelaySignerService) GetTransactionReceipt(id json.RawMessage, tra
 				}
 			case "0x" + eventBadTransaction:
 				sawBadTransaction = true
-				errorCode, badSender := badTransactionErrorCode(id, log.Data)
+				errorCode, badSender := badTransactionErrorCode(ctx, id, lg.Data)
 				// La meta-tx no consumió nonce en el RelayHub: descartar el contador local del
 				// sender para que su próxima lectura "pending" vuelva al nonce real on-chain.
 				service.invalidateNonce(badSender.Hex())
+				hubRejected(ctx, transactionID, badSender, errorCode)
 				receipt.Status = uint64(0)
 
 				jsonReceipt, err := json.Marshal(receipt)
 				if err != nil {
-					HandleError(id, err)
+					HandleError(ctx, id, err)
 				}
 
 				json.Unmarshal(jsonReceipt, &receiptReverted)
@@ -215,7 +248,7 @@ func (service *RelaySignerService) GetTransactionReceipt(id json.RawMessage, tra
 
 			jsonReceipt, err := json.Marshal(receipt)
 			if err != nil {
-				HandleError(id, err)
+				HandleError(ctx, id, err)
 			}
 
 			json.Unmarshal(jsonReceipt, &receiptReverted)
@@ -234,17 +267,19 @@ func (service *RelaySignerService) GetTransactionReceipt(id json.RawMessage, tra
 
 // GetMetaTxResult devuelve el resultado parseado de un meta-tx relayado, a partir de los eventos del
 // RelayHub en el receipt: { mined, success, executed, errorCode, revertReason, deployedAddress }.
-func (service *RelaySignerService) GetMetaTxResult(id json.RawMessage, transactionID string) *rpc.JsonrpcMessage {
+func (service *RelaySignerService) GetMetaTxResult(ctx context.Context, id json.RawMessage, transactionID string) *rpc.JsonrpcMessage {
+	ctx = service.recallMetaTx(ctx, common.HexToHash(transactionID))
+
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
-		return HandleError(id, err)
+		return HandleError(ctx, id, err)
 	}
 	defer client.Close()
 
 	receipt, err := client.GetTransactionReceipt(common.HexToHash(transactionID))
 	if err != nil {
-		return HandleError(id, err)
+		return HandleError(ctx, id, err)
 	}
 
 	out := map[string]interface{}{
@@ -283,7 +318,7 @@ func (service *RelaySignerService) GetMetaTxResult(id json.RawMessage, transacti
 				out["deployedAddress"] = common.BytesToAddress(lg.Data).Hex()
 			case eventTransactionRelayed:
 				sawTransactionRelayed = true
-				executed, output := transactionRelayedFailed(id, lg.Data)
+				executed, output := transactionRelayedFailed(ctx, id, lg.Data)
 				out["executed"] = executed
 				if !executed {
 					out["success"] = false
@@ -291,8 +326,9 @@ func (service *RelaySignerService) GetMetaTxResult(id json.RawMessage, transacti
 				}
 			case eventBadTransaction:
 				sawBadTransaction = true
-				code, badSender := badTransactionErrorCode(id, lg.Data)
+				code, badSender := badTransactionErrorCode(ctx, id, lg.Data)
 				service.invalidateNonce(badSender.Hex())
+				hubRejected(ctx, transactionID, badSender, code)
 				out["success"] = false
 				out["executed"] = false
 				out["errorCode"] = errorCodeName(code)
@@ -318,7 +354,7 @@ func (service *RelaySignerService) GetMetaTxResult(id json.RawMessage, transacti
 }
 
 // GetTransactionCount of account
-func (service *RelaySignerService) GetTransactionCount(id json.RawMessage, from string, isPending bool) *rpc.JsonrpcMessage {
+func (service *RelaySignerService) GetTransactionCount(ctx context.Context, id json.RawMessage, from string, isPending bool) *rpc.JsonrpcMessage {
 	var count *big.Int
 	if isPending {
 		if next, ok := service.cachedNonce(from); ok {
@@ -329,20 +365,20 @@ func (service *RelaySignerService) GetTransactionCount(id json.RawMessage, from 
 		client := new(bl.Client)
 		err := client.Connect(service.Config.Application.NodeURL)
 		if err != nil {
-			return HandleError(id, err)
+			return HandleError(ctx, id, err)
 		}
 		defer client.Close()
 
 		privateKey, err := crypto.HexToECDSA(service.Config.Application.Key)
 		if err != nil {
-			HandleError(id, err)
+			HandleError(ctx, id, err)
 		}
 
 		publicKey := privateKey.Public()
 		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 		if !ok {
 			err := errors.New("error casting public key to ECDSA", -32602)
-			HandleError(id, err)
+			HandleError(ctx, id, err)
 		}
 
 		nodeAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
@@ -351,7 +387,7 @@ func (service *RelaySignerService) GetTransactionCount(id json.RawMessage, from 
 
 		count, err = client.GetTransactionCount(*service.Config.Application.RelayHubContractAddress, address, nodeAddress)
 		if err != nil {
-			HandleError(id, err)
+			HandleError(ctx, id, err)
 		}
 	}
 
@@ -362,7 +398,7 @@ func (service *RelaySignerService) GetTransactionCount(id json.RawMessage, from 
 }
 
 // VerifyGasLimit sent a transaction
-func (service *RelaySignerService) VerifyGasLimit(gasLimit uint64, id json.RawMessage) (bool, error) {
+func (service *RelaySignerService) VerifyGasLimit(ctx context.Context, gasLimit uint64, id json.RawMessage) (bool, error) {
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
@@ -372,14 +408,14 @@ func (service *RelaySignerService) VerifyGasLimit(gasLimit uint64, id json.RawMe
 
 	privateKey, err := crypto.HexToECDSA(service.Config.Application.Key)
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	publicKey := privateKey.Public()
 	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 	if !ok {
 		err := errors.New("error casting public key to ECDSA", -32602)
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	nodeAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
@@ -400,7 +436,7 @@ func (service *RelaySignerService) VerifyGasLimit(gasLimit uint64, id json.RawMe
 }
 
 // VerifySender sent a transaction
-func (service *RelaySignerService) VerifySender(sender common.Address, id json.RawMessage) (bool, error) {
+func (service *RelaySignerService) VerifySender(ctx context.Context, sender common.Address, id json.RawMessage) (bool, error) {
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
@@ -421,11 +457,11 @@ func (service *RelaySignerService) VerifySender(sender common.Address, id json.R
 }
 
 // DecreaseGasUsed by node
-func (service *RelaySignerService) DecreaseGasUsed(id json.RawMessage) bool {
+func (service *RelaySignerService) DecreaseGasUsed(ctx context.Context, id json.RawMessage) bool {
 	client := new(bl.Client)
 	err := client.Connect(service.Config.Application.NodeURL)
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 		return false
 	}
 	defer client.Close()
@@ -437,18 +473,18 @@ func (service *RelaySignerService) DecreaseGasUsed(id json.RawMessage) bool {
 
 	options, err := client.ConfigTransaction(privateKey, 30000, false)
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	_, err = client.DecreaseGasUsed(*service.Config.Application.RelayHubContractAddress, options, new(big.Int).SetUint64(25000))
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	return true
 }
 
-func transactionRelayedFailed(id json.RawMessage, data []byte) (bool, []byte) {
+func transactionRelayedFailed(ctx context.Context, id json.RawMessage, data []byte) (bool, []byte) {
 	var transactionRelayedEvent struct {
 		Relay    common.Address
 		From     common.Address
@@ -459,13 +495,13 @@ func transactionRelayedFailed(id json.RawMessage, data []byte) (bool, []byte) {
 
 	relayHubAbi, err := abi.JSON(strings.NewReader(RelayABI))
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	err = relayHubAbi.Unpack(&transactionRelayedEvent, "TransactionRelayed", data)
 
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	return transactionRelayedEvent.Executed, transactionRelayedEvent.Output
@@ -473,7 +509,7 @@ func transactionRelayedFailed(id json.RawMessage, data []byte) (bool, []byte) {
 
 // badTransactionErrorCode decodifica el evento BadTransactionSent y devuelve su ErrorCode y el
 // originalSender afectado (para invalidar su entrada en el caché de nonces).
-func badTransactionErrorCode(id json.RawMessage, data []byte) (uint8, common.Address) {
+func badTransactionErrorCode(ctx context.Context, id json.RawMessage, data []byte) (uint8, common.Address) {
 	var badTransactionEvent struct {
 		Node           common.Address
 		OriginalSender common.Address
@@ -482,12 +518,12 @@ func badTransactionErrorCode(id json.RawMessage, data []byte) (uint8, common.Add
 
 	relayHubAbi, err := abi.JSON(strings.NewReader(RelayABI))
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	err = relayHubAbi.Unpack(&badTransactionEvent, "BadTransactionSent", data)
 	if err != nil {
-		HandleError(id, err)
+		HandleError(ctx, id, err)
 	}
 
 	return badTransactionEvent.ErrorCode, badTransactionEvent.OriginalSender
@@ -565,6 +601,21 @@ func decodeKnownCustomError(selector string, output []byte) string {
 		}
 	}
 	return def.name + "(" + strings.Join(parts, ", ") + ")"
+}
+
+// hubRejected registra que el RelayHub rechazo una metatx ya enviada.
+//
+// Es el escenario que rompe la cadena de nonces: el hub NO consumio el nonce del usuario, asi que
+// todas las metatx que se encadenaron despues quedaron invalidas. El contexto trae el metaTxId de
+// la metatx original aunque este receipt se este procesando en otra peticion. Ver D11.
+func hubRejected(ctx context.Context, transactionID string, from common.Address, errorCode uint8) {
+	log.Warn(ctx, "relay.hub_rejected", map[string]interface{}{
+		"transactionHash": "0x" + strings.TrimPrefix(transactionID, "0x"),
+		"from":            from.Hex(),
+		"errorCode":       errorCode,
+		"errorCodeName":   errorCodeName(errorCode),
+		"note":            "el nonce reservado se descarta: las metatx encadenadas despues de esta van a fallar",
+	})
 }
 
 // errorCodeName traduce el enum ErrorCode de IRelayHub a un nombre legible.
@@ -754,7 +805,7 @@ func (service *RelaySignerService) incrementTransactionCount(from string, nonce 
 }
 
 // HandleError
-func HandleError(id json.RawMessage, err error) *rpc.JsonrpcMessage {
+func HandleError(ctx context.Context, id json.RawMessage, err error) *rpc.JsonrpcMessage {
 	log.GeneralLogger.Println(err.Error())
 	result := new(rpc.JsonrpcMessage)
 	result.ID = id

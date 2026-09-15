@@ -86,7 +86,13 @@ func (ec *Client) ConfigTransaction(key *ecdsa.PrivateKey, gasLimit uint64, pend
 }
 
 // SendMetatransaction into blockchain
-func (ec *Client) SendMetatransaction(contractAddress common.Address, options *bind.TransactOpts, to *common.Address, signingData []byte, v uint8, r [32]byte, s [32]byte) (*common.Hash, error) {
+// SendMetatransaction envuelve la metatx en una llamada al RelayHub, la firma con la clave del
+// nodo y la difunde.
+//
+// Devuelve la transaccion enviada y no solo su hash: el nonce de la CUENTA del writer node vive
+// ahi, es el que traba el txpool si algo se pierde, y el unico dato con el que se puede desatascar
+// la cola desde el nodo. El llamador sigue respondiendo el hash al cliente. Ver design.md, D13.
+func (ec *Client) SendMetatransaction(contractAddress common.Address, options *bind.TransactOpts, to *common.Address, signingData []byte, v uint8, r [32]byte, s [32]byte) (*types.Transaction, error) {
 	contract, err := relay.NewRelay(contractAddress, ec.client)
 	if err != nil {
 		msg := fmt.Sprintf("can't instance RelayHub contract %s", contractAddress)
@@ -117,9 +123,7 @@ func (ec *Client) SendMetatransaction(contractAddress common.Address, options *b
 	}
 	log.GeneralLogger.Printf("MetaTransaction sent: %s", tx.Hash().Hex())
 
-	transactionHash := tx.Hash()
-
-	return &transactionHash, nil
+	return tx, nil
 }
 
 func (ec *Client) GenerateTransaction(options *bind.TransactOpts, to *common.Address, relayAddress common.Address, signingData []byte, v uint8, r, s [32]byte) (*types.Transaction, error) {
