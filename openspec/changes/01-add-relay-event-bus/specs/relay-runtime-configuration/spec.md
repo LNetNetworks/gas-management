@@ -17,6 +17,11 @@ El sistema SHALL reconocer en `config.toml` un bloque `[reorder]` con las claves
 la salida. `log.rawTx` habilita el volcado de la transaccion firmada completa descrito por
 `relay-structured-logging`.
 
+`dashboard.bufferSize` distingue la clave ausente de un `0` explicito: ausente toma su valor por
+defecto, y `0` deja el bus sin capacidad, es decir inerte, igual que `dashboard.enabled = false`.
+Es la unica clave nueva donde el cero tiene significado propio en lugar de ser el valor de una
+clave que no se escribio.
+
 Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 
 | Clave | Default |
@@ -37,6 +42,13 @@ Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 - **THEN** el servicio arranca sin error
 - **AND** cada parametro toma su valor por defecto
 - **AND** ambas capacidades quedan deshabilitadas
+
+#### Scenario: El buffer del dashboard se declara en cero
+
+- **WHEN** el servicio arranca con `dashboard.enabled = true` y `dashboard.bufferSize = 0`
+- **THEN** el bus no retiene ningun evento
+- **AND** el servicio arranca sin error y no registra ninguna clave descartada
+- **AND** el log estructurado sigue emitiendo sus lineas
 
 #### Scenario: Los bloques traen valores explicitos
 

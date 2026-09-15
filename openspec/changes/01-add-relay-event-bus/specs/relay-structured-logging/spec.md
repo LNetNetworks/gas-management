@@ -49,6 +49,11 @@ respondido al cliente.
 El sistema SHALL asignar ademas un identificador `metaTxId` a cada metatx, distinto del `reqId`, y
 SHALL incluirlo en todo evento referido a esa metatx.
 
+Esto vale tambien cuando el evento se origina en una peticion HTTP **distinta** de la que relayo la
+metatx — el caso de este servicio, donde el resultado en cadena se conoce recien cuando un cliente
+consulta el receipt — o fuera de toda peticion. El `reqId` y el `metaTxId` que lleva el evento son los
+de la peticion que relayo la metatx, no los de la que lo hizo observable.
+
 #### Scenario: Eventos de una misma peticion
 
 - **WHEN** una peticion HTTP produce varios eventos a lo largo de su procesamiento
@@ -59,6 +64,13 @@ SHALL incluirlo en todo evento referido a esa metatx.
 - **WHEN** el sistema emite un evento referido a una metatx despues de haber respondido al cliente
 - **THEN** ese evento conserva el `reqId` de la peticion que lo origino
 - **AND** conserva el `metaTxId` de esa metatx
+
+#### Scenario: Un evento originado en otra peticion
+
+- **WHEN** el sistema emite un evento referido a una metatx mientras atiende una peticion HTTP
+  distinta de la que la relayo
+- **THEN** ese evento lleva el `metaTxId` de esa metatx
+- **AND** lleva el `reqId` de la peticion que la relayo, no el de la peticion en curso
 
 #### Scenario: Dos metatx distintas
 

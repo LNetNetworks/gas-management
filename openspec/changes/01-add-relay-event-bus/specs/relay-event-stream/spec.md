@@ -132,15 +132,22 @@ asociarse a ninguna metatx y sera ignorado por la vista en vivo.
 | Evento | Significado | Campos propios |
 |---|---|---|
 | `relay.received` | llego una metatx por HTTP | `rawTxHash`, `rawTxBytes` |
-| `relay.decoded` | se decodifico y validó su forma | `from`, `to`, `isDeploy`, `nonce`, `userGasLimit`, `metaTxGasLimit`, `nodeAddress`, `expiration`, `expiresInSeconds`, `dataBytes`, `selector` |
+| `relay.decoded` | se decodifico y valido su forma | `from`, `to`, `isDeploy`, `nonce`, `userGasLimit`, `metaTxGasLimit`, `nodeAddress`, `expiration`, `expiresInSeconds`, `dataBytes`, `selector` |
 | `relay.held` | quedo retenida esperando su turno | `nonce`, `expected`, `gap`, `windowMs` |
 | `relay.turn` | le llego el turno | `heldMs`, `reason` |
 | `relay.sent` | se envio al hub | `transactionHash`, `hubNonce`, `writerNodeNonce`, `metaTxGasLimit`, `simulated`, `simulatedErrorCodeName`, `pendingForUser` |
 | `relay.settled` | se resolvio en la cadena | `blockNumber`, `gasUsed`, `executed`, `errorCodeName`, `deployedAddress` |
-| `relay.rejected` | se rechazo sin enviarla | `code` |
+| `relay.rejected` | se rechazo sin enviarla | `error`, y `code` / `errorType` cuando el rechazo los trae |
+| `relay.hub_rejected` | el hub la rechazo al ejecutarla, sin consumir el nonce | `transactionHash`, `from`, `errorCode`, `errorCodeName` |
+| `relay.settle_failed` | no se pudo determinar como termino | `error`, y `code` / `errorType` cuando los trae |
 
 Ademas de sus campos propios, cada evento SHALL llevar los campos comunes definidos por
 `relay-structured-logging` y el `seq` del bus.
+
+En los eventos de rechazo el campo obligatorio es `error`: es el que la vista usa para mostrar el
+motivo, y sin el no muestra ninguno. `code` y `errorType` son opcionales porque no todo rechazo los
+trae, y `code` SHALL ser el mismo valor que viaja en la respuesta JSON-RPC de esa peticion, de modo
+que el evento y la respuesta no puedan indicar motivos distintos.
 
 #### Scenario: Una metatx aceptada y enviada
 
@@ -152,7 +159,15 @@ Ademas de sus campos propios, cada evento SHALL llevar los campos comunes defini
 #### Scenario: Una metatx rechazada
 
 - **WHEN** el sistema rechaza una metatx sin enviarla al hub
-- **THEN** publica `relay.rejected` con el campo `code` identificando el motivo
+- **THEN** publica `relay.rejected` con el campo `error` describiendo el motivo
+- **AND** incluye `code` y `errorType` si el rechazo los trae
+- **AND** el `code` publicado coincide con el de la respuesta JSON-RPC de esa peticion
+- **AND** ese evento comparte el `metaTxId` de los eventos previos de esa metatx
+
+#### Scenario: El hub rechaza una metatx ya enviada
+
+- **WHEN** el receipt de una metatx enviada indica que el hub la rechazo
+- **THEN** publica `relay.hub_rejected` con `errorCode` y su `errorCodeName`
 - **AND** ese evento comparte el `metaTxId` de los eventos previos de esa metatx
 
 #### Scenario: Un campo sin valor aplicable
@@ -164,10 +179,13 @@ Ademas de sus campos propios, cada evento SHALL llevar los campos comunes defini
 
 ### Requirement: Alcance de emision de esta capacidad
 
-El sistema SHALL emitir `relay.received`, `relay.decoded`, `relay.sent` y `relay.rejected` en el
-camino de relay existente. Los eventos `relay.held`, `relay.turn` y `relay.settled` quedan
-definidos por este contrato pero su emision corresponde a la capacidad de reordenamiento de nonces,
-que aun no existe.
+El sistema SHALL emitir `relay.received`, `relay.decoded`, `relay.sent`, `relay.rejected` y
+`relay.hub_rejected` en el camino de relay existente. `relay.hub_rejected` se emite donde el
+servicio ya detecta el rechazo del hub al procesar un receipt.
+
+Los eventos `relay.held`, `relay.turn`, `relay.settled` y `relay.settle_failed` quedan definidos
+por este contrato pero su emision corresponde a la capacidad de reordenamiento de nonces y a su
+watcher de receipts, que aun no existen.
 
 #### Scenario: Rafaga por el camino actual
 
@@ -175,3 +193,10 @@ que aun no existe.
 - **THEN** el bus contiene, para cada metatx, su `relay.received`, su `relay.decoded` y luego su
   `relay.sent` o su `relay.rejected`
 - **AND** no contiene `relay.held` ni `relay.turn`
+
+#### Scenario: El cierre se observa en otra peticion
+
+- **WHEN** el receipt de una metatx se procesa en una peticion HTTP distinta de la que la relayo
+- **THEN** el evento resultante lleva el `metaTxId` de esa metatx
+- **AND** lleva el `reqId` de la peticion que la relayo, no el de la que consulto el receipt
+- **AND** la vista en vivo lo asocia a la misma metatx que sus eventos previos

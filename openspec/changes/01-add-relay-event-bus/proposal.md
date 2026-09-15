@@ -44,10 +44,24 @@ de `docs/PLAN-reorden-dashboard.md`.
   (`heldMs`, `reason`), `relay.sent` (`transactionHash`, `hubNonce`, `writerNodeNonce`,
   `metaTxGasLimit`, `simulated`, `simulatedErrorCodeName`, `pendingForUser`), `relay.settled`
   (`blockNumber`, `gasUsed`, `executed`, `errorCodeName`, `deployedAddress`), `relay.rejected`
-  (`code`).
+  (`error`, y `code` / `errorType` cuando los trae), `relay.hub_rejected` (`transactionHash`,
+  `from`, `errorCode`, `errorCodeName`) y `relay.settle_failed` (`error`, `code`, `errorType`).
+  Los dos ultimos estaban fuera del plan y la pagina portada los consume: fijan estado terminal,
+  alimentan el contador de fallidas y la marca de la linea de tiempo.
 - **Emision de los eventos que el camino actual ya puede producir**: `relay.received`,
-  `relay.decoded`, `relay.sent` y `relay.rejected`. `relay.held` / `relay.turn` los emite
-  `04-add-nonce-reordering` y `relay.settled` el watcher de receipts de esa misma propuesta.
+  `relay.decoded`, `relay.sent`, `relay.rejected` y `relay.hub_rejected` —este ultimo donde el
+  servicio ya detecta `BadTransactionSent` al procesar un receipt e invalida el nonce del sender—.
+  `relay.held` / `relay.turn` los emite `04-add-nonce-reordering`, y `relay.settled` /
+  `relay.settle_failed` el watcher de receipts de esa misma propuesta.
+- **Correlacion del cierre entre peticiones**: en este servicio el receipt no llega en la peticion
+  que relayo la metatx, sino en la que el cliente hace despues para consultarlo. Un mapa en memoria
+  de `txHash` al `reqId` y `metaTxId` originales, con TTL y tope de entradas, es lo que permite que
+  un evento de cierre siga perteneciendo a su metatx. Sin el, la pagina lo descarta en silencio.
+- **Campos del contrato que hoy no se calculan**: se decodifica el sufijo del gas model —los
+  ultimos 64 bytes del `data`, con `nodeAddress` y `expiration`— **solo para registrarlo, nunca
+  para validar**, y `blockchain/client.go` pasa a devolver la transaccion enviada en vez de solo su
+  hash, para poder informar el nonce del writer node. La respuesta de `eth_sendRawTransaction` no
+  cambia.
 
 No hay cambios de comportamiento observables: el contrato JSON-RPC de `POST /` queda intacto.
 
@@ -68,8 +82,10 @@ No hay cambios de comportamiento observables: el contrato JSON-RPC de `POST /` q
 ## Impact
 
 - **Codigo**: `model/Config.go`, `config.toml`, `audit/` (emisor JSON nuevo, sin tocar el
-  existente), paquete nuevo `events/`, y puntos de emision en `controller/relayController.go`,
-  `controller/processController.go` y `service/relaySignerService.go`.
+  existente), paquete nuevo `events/`, `blockchain/client.go` (devolver la transaccion enviada en
+  lugar de solo su hash), y puntos de emision en `controller/relayController.go`,
+  `controller/processController.go` y `service/relaySignerService.go`, que ademas aloja el mapa de
+  correlacion y la decodificacion del sufijo del gas model.
 - **APIs**: ninguna. No se agregan rutas ni cambia ninguna respuesta.
 - **Operacion**: un archivo/stream de log adicional. El log de texto que hoy se parsea no cambia.
 - **Dependencias**: ninguna nueva; ring buffer y JSON con la libreria estandar.
