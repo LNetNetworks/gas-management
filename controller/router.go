@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/LACNetNetworks/gas-relay-signer/dashboard"
 )
 
 // Ruteo por path del servicio.
@@ -25,6 +27,15 @@ func (controller *RelayController) Routes(mux *http.ServeMux) {
 	// Subarbol y no comodin: `{address}` no coincide con `/nonce/` a secas, asi que una peticion
 	// sin direccion caeria al catch-all en lugar de dar el 400 que corresponde. Ver D2.
 	mux.HandleFunc("/nonce/", onlyMethod(http.MethodGet, controller.Nonce))
+
+	// Las rutas del monitor NO se registran con el dashboard apagado, en lugar de registrarse y
+	// responder que estan deshabilitadas: asi no queda una superficie que informe que el monitor
+	// existe, y esos paths se comportan como cualquier otro sin manejador propio. Ver D7 de
+	// 03-add-relay-dashboard.
+	if controller.Config != nil && controller.Config.Dashboard.Enabled {
+		mux.HandleFunc("/dashboard", onlyMethod(http.MethodGet, dashboard.Page))
+		mux.HandleFunc("/dashboard/stream", onlyMethod(http.MethodGet, dashboard.Stream))
+	}
 }
 
 // onlyMethod deja pasar un solo metodo y responde 405 para el resto, sin que la peticion caiga al

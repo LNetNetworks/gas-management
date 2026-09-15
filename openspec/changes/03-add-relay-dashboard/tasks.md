@@ -1,55 +1,55 @@
 ## 1. Reanudacion atomica en el bus
 
-- [ ] 1.1 Agregar al bus una operacion que copie lo retenido posterior a un `seq` y registre la
+- [x] 1.1 Agregar al bus una operacion que copie lo retenido posterior a un `seq` y registre la
   suscripcion bajo el mismo candado, segun D1, y verificar con un test que publicar concurrentemente
   mientras un observador se conecta no pierde ni duplica ningun evento
-- [ ] 1.2 Verificar con un test que `Replay` y `Subscribe` siguen funcionando por separado como
+- [x] 1.2 Verificar con un test que `Replay` y `Subscribe` siguen funcionando por separado como
   antes, para no romper a ningun consumidor existente
 
 ## 2. Ruteo condicional
 
-- [ ] 2.1 Registrar las rutas del monitor solo cuando el dashboard esta habilitado, segun D7, y
+- [x] 2.1 Registrar las rutas del monitor solo cuando el dashboard esta habilitado, segun D7, y
   verificar con un test que con el flag apagado esos paths los atiende el camino JSON-RPC como
   cualquier path desconocido, sin responder `405`
-- [ ] 2.2 Verificar con un test que con el flag encendido las dos rutas responden, y que pedirlas
+- [x] 2.2 Verificar con un test que con el flag encendido las dos rutas responden, y que pedirlas
   con un metodo que no les corresponde responde `405` sin caer al camino JSON-RPC
-- [ ] 2.3 Verificar con un test que ninguna ruta que ya existia cambio de comportamiento al
+- [x] 2.3 Verificar con un test que ninguna ruta que ya existia cambio de comportamiento al
   agregarse el registro condicional
 
 ## 3. Entrega de la pagina
 
-- [ ] 3.1 Portar la pagina del relayer de Node a un `index.html` sin modificar su contenido, y
+- [x] 3.1 Portar la pagina del relayer de Node a un `index.html` sin modificar su contenido, y
   verificar comparando que el HTML, el CSS y el JavaScript son los mismos que los de la fuente
-- [ ] 3.2 Embeber la pagina en el binario y servirla como HTML, y verificar con un test que se
+- [x] 3.2 Embeber la pagina en el binario y servirla como HTML, y verificar con un test que se
   responde sin leer ningun archivo del sistema de archivos
 - [ ] 3.3 Verificar que el binario compilado sirve la pagina desde un directorio vacio, para
   comprobar que no depende de archivos al lado del ejecutable
 
 ## 4. Stream de eventos
 
-- [ ] 4.1 Responder el stream como flujo de eventos enviados por el servidor, con cada evento
+- [x] 4.1 Responder el stream como flujo de eventos enviados por el servidor, con cada evento
   identificado por su numero de secuencia, y verificar con un test que un evento publicado con el
   stream abierto llega al observador
-- [ ] 4.2 Aceptar el punto de partida indicado en la peticion y el que manda el reintento automatico
+- [x] 4.2 Aceptar el punto de partida indicado en la peticion y el que manda el reintento automatico
   del navegador, y verificar con tests que se reanuda desde el numero indicado por cualquiera de los
   dos
-- [ ] 4.3 Entregar el historial y despues lo nuevo usando la operacion atomica de la seccion 1, y
+- [x] 4.3 Entregar el historial y despues lo nuevo usando la operacion atomica de la seccion 1, y
   verificar con un test que un evento publicado en el instante de conectarse llega exactamente una
   vez
-- [ ] 4.4 Verificar con tests los dos casos restantes de reanudacion: sin indicar punto de partida
+- [x] 4.4 Verificar con tests los dos casos restantes de reanudacion: sin indicar punto de partida
   se entrega todo lo retenido, y desde un punto ya descartado se entrega todo lo que queda sin error
-- [ ] 4.5 Emitir el latido periodico y las cabeceras que piden no almacenar ni transformar la
+- [x] 4.5 Emitir el latido periodico y las cabeceras que piden no almacenar ni transformar la
   respuesta, y verificar con tests que un periodo sin eventos mantiene el stream abierto y que las
   cabeceras estan presentes
 
 ## 5. Limite de observadores y liberacion
 
-- [ ] 5.1 Rechazar la conexion que supera el limite de observadores indicando el motivo, y verificar
+- [x] 5.1 Rechazar la conexion que supera el limite de observadores indicando el motivo, y verificar
   con un test que los ya conectados siguen recibiendo eventos y que ninguno es desplazado
-- [ ] 5.2 Cancelar la suscripcion y liberar el lugar cuando la conexion se cierra, atado al contexto
+- [x] 5.2 Cancelar la suscripcion y liberar el lugar cuando la conexion se cierra, atado al contexto
   de la peticion segun D4, y verificar con un test que abrir y cerrar el stream muchas veces no
   acumula observadores y que el cupo vuelve a estar disponible
-- [ ] 5.3 Comprobar el limite contra la cantidad de suscriptores del bus y no contra un contador
+- [x] 5.3 Comprobar el limite contra la cantidad de suscriptores del bus y no contra un contador
   propio, segun D5, y verificar con un test que tras liberarse un lugar una conexion nueva se acepta
 
 ## 6. Intercambio entre origenes
