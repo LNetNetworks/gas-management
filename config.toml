@@ -20,10 +20,17 @@ accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
 # capacidades quedan apagadas: descomentar solo lo que se quiera cambiar.
 
 # [reorder]
-# enabled = false             # retener una metatx adelantada hasta que se cierre el hueco de nonce
-# windowMs = 3000             # cuanto se espera, como maximo, a la que falta
-# maxInflightPerUser = 16     # tope de metatx en vuelo por usuario
-# receiptTimeoutMs = 60000    # cuanto se espera el receipt antes de soltar la retencion
+# enabled = false             # tracker de nonces, retencion de la metatx adelantada y watcher de
+#                             # resultados. Apagado, ninguno de los tres actua
+# windowMs = 3000             # cuanto puede estar retenida una metatx SIN que avance el nonce
+#                             # esperado de su usuario. Es tambien la gracia antes de olvidar a un
+#                             # usuario que se quedo sin metatx en vuelo
+# maxInflightPerUser = 16     # tope de metatx del mismo usuario en vuelo o retenidas
+# receiptTimeoutMs = 60000    # cuanto se espera el resultado antes de darlo por indeterminado
+# autoNonce = false           # repartir nonces: las consultas del mismo usuario se serializan y
+#                             # cada una se lleva un numero distinto. Apagado, consultar no reserva
+# autoNonceTicketMs = 2000    # cuanto se espera la metatx que use un nonce entregado antes de que
+#                             # ese mismo numero vuelva a entregarse
 
 # [dashboard]
 # enabled = false             # publicar los eventos en el bus en memoria

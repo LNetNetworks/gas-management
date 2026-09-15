@@ -7,6 +7,7 @@ import (
 
 	bl "github.com/LACNetNetworks/gas-relay-signer/blockchain"
 	"github.com/LACNetNetworks/gas-relay-signer/errors"
+	"github.com/LACNetNetworks/gas-relay-signer/model"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -46,7 +47,8 @@ type ServiceInfo struct {
 	MaxInflightPerUser int  `json:"maxInflightPerUser"`
 	ReceiptTimeoutMs   int  `json:"receiptTimeoutMs"`
 
-	// Este servicio no reserva nonces. Se informan apagados por la misma razon.
+	// El reparto de nonces: si el numero que el servicio entrega es de ese cliente o compartido, y
+	// cuanto se espera la metatx que lo use.
 	AutoNonce         bool `json:"autoNonce"`
 	AutoNonceTicketMs int  `json:"autoNonceTicketMs"`
 }
@@ -88,6 +90,8 @@ func (service *RelaySignerService) Info(ctx context.Context) ServiceInfo {
 		ReorderWindowMs:     config.Reorder.WindowMs,
 		MaxInflightPerUser:  config.Reorder.MaxInflightPerUser,
 		ReceiptTimeoutMs:    config.Reorder.ReceiptTimeoutMs,
+		AutoNonce:           config.Reorder.AutoNonce,
+		AutoNonceTicketMs:   ticketMsInEffect(config.Reorder),
 	}
 	if config.Application.ContractAddress != "" {
 		proxy := config.Application.ContractAddress
@@ -146,4 +150,16 @@ func text(value *big.Int) *string {
 	}
 	rendered := value.String()
 	return &rendered
+}
+
+// ticketMsInEffect es el plazo del ticket que el servicio esta aplicando de verdad.
+//
+// Con el reparto apagado no hay ticket que vencer, y se informa cero. Publicar el plazo configurado
+// cuando no rige haria que un cliente cuente con una serializacion que no existe, y ademas cambiaria
+// la respuesta de `GET /info` respecto de la del binario anterior con la capacidad apagada.
+func ticketMsInEffect(reorder model.ReorderConfig) int {
+	if !reorder.AutoNonce {
+		return 0
+	}
+	return reorder.AutoNonceTicketMs
 }

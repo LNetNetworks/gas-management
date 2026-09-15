@@ -40,20 +40,26 @@ var GAS_LIMIT uint64 = 0
 
 var lock sync.Mutex
 
-// nonceEntry es una entrada del caché de nonces por sender: el PRÓXIMO nonce a usar y cuándo se
-// actualizó. `updatedAt` permite expirar entradas obsoletas (TTL) y volver a leer el nonce real
-// on-chain (getNonce del RelayHub) si el caché quedara desincronizado por cualquier causa.
-type nonceEntry struct {
-	next      uint64
-	updatedAt time.Time
-}
-
 // RelaySignerService is the main service
 type RelaySignerService struct {
 	// The service's configuration
-	Config      *model.Config
+	Config *model.Config
+	// senders es el tracker de nonces en vuelo por usuario. Ver tracker.go.
 	senders     map[string]*nonceEntry
 	sendersLock sync.Mutex
+	// turnWaiters son las metatx retenidas por el reordenamiento que estan dormidas esperando que
+	// el nonce esperado avance, y heldCount cuantas hay retenidas en total por usuario.
+	turnWaiters map[string]map[chan struct{}]struct{}
+	heldCount   map[string]int
+	// userLocks serializa la reserva del nonce del hub y el envio POR USUARIO, sin serializar el
+	// throughput entre usuarios. Ver reorder.go.
+	userLocks      map[string]*userLock
+	userLocksMutex sync.Mutex
+	// handouts son los nonces entregados y todavia sin usar, por usuario. Ver handout.go.
+	handouts map[string]*handoutTicket
+	// openTickets es, por usuario, el ticket cuyo numero ya se entrego y espera su metatx.
+	openTickets   map[string]*handoutTicket
+	handoutsMutex sync.Mutex
 	// metaTx recuerda, por hash de la transaccion enviada, a que metatx pertenece. Sin esto un
 	// receipt consultado en otra peticion no se podria asociar a la metatx que lo origino.
 	metaTx     map[common.Hash]*metaTxEntry
@@ -154,13 +160,13 @@ func (service *RelaySignerService) sendPrepared(ctx context.Context, prepared *P
 	// mismo que antes de que este metodo tuviera la transaccion entera a mano.
 	transactionHash := tx.Hash()
 
-	// Se recuerda a que metatx pertenece este hash: el receipt llega en otra peticion, donde no
-	// existe ningun metaTxId del que partir. Ver design.md, D11.
-	service.rememberMetaTx(ctx, transactionHash)
+	// El envio salio: se anota en el tracker y se recuerda a que metatx pertenece este hash. El
+	// receipt llega en otra peticion -o en el watcher-, donde no existe ningun metaTxId del que
+	// partir ni forma de saber que cadena de nonces liberar. Ver design.md, D6 y D11.
+	chain, pendingForUser := service.noteSent(prepared)
+	service.rememberMetaTx(ctx, transactionHash, senderKey(prepared.SenderKey), chain)
 
 	log.GeneralLogger.Println("transaction", &transactionHash)
-
-	service.incrementTransactionCount(prepared.SenderKey, prepared.Nonce)
 
 	log.Info(ctx, "relay.sent", map[string]interface{}{
 		"transactionHash": transactionHash.Hex(),
@@ -174,7 +180,9 @@ func (service *RelaySignerService) sendPrepared(ctx context.Context, prepared *P
 		// de omitirse, para que la vista distinga "no aplica" de "no se emitio". Ver D13.
 		"simulated":              nil,
 		"simulatedErrorCodeName": nil,
-		"pendingForUser":         nil,
+		// Con el reordenamiento apagado nadie libera lo en vuelo, asi que no hay un numero que
+		// informar y sale sin valor, como hasta ahora.
+		"pendingForUser": pendingForUser,
 	})
 
 	return transactionHash, nil
@@ -382,7 +390,11 @@ func (service *RelaySignerService) GetMetaTxResult(ctx context.Context, id json.
 func (service *RelaySignerService) GetTransactionCount(ctx context.Context, id json.RawMessage, from string, isPending bool) *rpc.JsonrpcMessage {
 	var count *big.Int
 	if isPending {
-		if next, ok := service.cachedNonce(from); ok {
+		// Las dos puertas del nonce sirven del mismo estado y, con el reparto encendido, reparten de
+		// la misma secuencia: si cada una llevara su cuenta, un cliente que use una y otra firmaria
+		// con nonces incompatibles.
+		next, err := service.HandOutNonce(from, false)
+		if err == nil {
 			count = new(big.Int).SetUint64(next)
 		}
 	}
@@ -706,6 +718,10 @@ func (service *RelaySignerService) ProcessNewBlocks(done <-chan interface{}) {
 			case header := <-headers:
 				log.GeneralLogger.Println("new block generated:", header.Hash().Hex())
 				decrement()
+				// El watcher se cuelga de esta suscripcion en lugar de tener su propio sondeo: aca
+				// ya estan resueltos la reconexion y el backoff, y sin nada en vuelo no cuesta
+				// ninguna llamada. Ver design.md, D5.
+				service.SettleInFlight(context.Background())
 			case <-done:
 				log.GeneralLogger.Println("quit signal received...exiting from processing blocks")
 				sub.Unsubscribe()
@@ -791,13 +807,8 @@ func (service *RelaySignerService) nonceCacheTTL() time.Duration {
 func (service *RelaySignerService) cachedNonce(from string) (uint64, bool) {
 	service.sendersLock.Lock()
 	defer service.sendersLock.Unlock()
-	key := senderKey(from)
-	entry := service.senders[key]
+	entry := service.chainLocked(senderKey(from))
 	if entry == nil {
-		return 0, false
-	}
-	if time.Since(entry.updatedAt) > service.nonceCacheTTL() {
-		delete(service.senders, key)
 		return 0, false
 	}
 	return entry.next, true
@@ -808,9 +819,7 @@ func (service *RelaySignerService) cachedNonce(from string) (uint64, bool) {
 // nonce en el RelayHub, así que el contador local quedó por delante del real y no puede corregirse
 // solo (cada reintento lo alejaría +1 más, dejando la address bloqueada hasta reiniciar el servicio).
 func (service *RelaySignerService) invalidateNonce(from string) {
-	service.sendersLock.Lock()
-	defer service.sendersLock.Unlock()
-	delete(service.senders, senderKey(from))
+	service.forgetChain(senderKey(from))
 	log.GeneralLogger.Println("nonce cache invalidated for sender:", from)
 }
 
@@ -821,12 +830,10 @@ func (service *RelaySignerService) invalidateNonce(from string) {
 func (service *RelaySignerService) incrementTransactionCount(from string, nonce uint64) {
 	service.sendersLock.Lock()
 	defer service.sendersLock.Unlock()
-	key := senderKey(from)
-	next := nonce + 1
-	if entry := service.senders[key]; entry != nil && time.Since(entry.updatedAt) <= service.nonceCacheTTL() && entry.next > next {
-		next = entry.next
-	}
-	service.senders[key] = &nonceEntry{next: next, updatedAt: time.Now()}
+	// `inFlight` en false: esta es la anotacion del camino SIN reordenamiento, que solo alimenta la
+	// respuesta del nonce pendiente. Quien reserva de verdad -y cuenta lo en vuelo- es el camino de
+	// envio del reordenamiento, que llama a reserveLocked con el lock ya tomado.
+	service.reserveLocked(senderKey(from), nonce, false)
 }
 
 // HandleError

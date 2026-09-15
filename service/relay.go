@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/LACNetNetworks/gas-relay-signer/audit"
 	bl "github.com/LACNetNetworks/gas-relay-signer/blockchain"
 	"github.com/LACNetNetworks/gas-relay-signer/errors"
 	"github.com/ethereum/go-ethereum/common"
@@ -176,74 +175,15 @@ func (service *RelaySignerService) decodeRelayResult(ctx context.Context, hash c
 		result.BlockNumber = &blockNumber
 	}
 
-	topics := topicsOfHub()
-	var sawContractDeployed, sawTransactionRelayed, sawBadTransaction, sawRelayed bool
+	outcome := service.readHubEvents(ctx, hash, receipt)
+	result.Events = outcome.events
+	result.Executed = outcome.executed
+	result.ErrorCode = outcome.errorCode
+	result.ErrorCodeName = outcome.errorCodeName
+	result.Output = outcome.output
+	result.DeployedAddress = outcome.deployedAddress
 
-	for _, lg := range receipt.Logs {
-		if len(lg.Topics) == 0 {
-			continue
-		}
-		switch lg.Topics[0].Hex() {
-		case topics.contractDeployed:
-			sawContractDeployed = true
-			result.Events = append(result.Events, "ContractDeployed")
-			// En un deploy la direccion sale de ESTE evento y no del receipt: el campo del receipt
-			// trae la direccion de la transaccion envolvente, que es del nodo, no la del contrato
-			// del usuario.
-			deployed := common.BytesToAddress(lg.Data).Hex()
-			result.DeployedAddress = &deployed
-		case topics.transactionRelay:
-			sawTransactionRelayed = true
-			result.Events = append(result.Events, "TransactionRelayed")
-			executed, output := transactionRelayedFailed(ctx, nil, lg.Data)
-			result.Executed = &executed
-			if !executed {
-				reason := decodeRevertReason(output)
-				result.Output = &reason
-			}
-		case topics.badTransaction:
-			sawBadTransaction = true
-			result.Events = append(result.Events, "BadTransactionSent")
-			code, badSender := badTransactionErrorCode(ctx, nil, lg.Data)
-			service.invalidateNonce(badSender.Hex())
-			hubRejected(ctx, hash.Hex(), badSender, code)
-
-			executed := false
-			name := errorCodeName(code)
-			result.Executed = &executed
-			result.ErrorCode = &code
-			result.ErrorCodeName = &name
-		case topics.relayed:
-			sawRelayed = true
-			result.Events = append(result.Events, "Relayed")
-		case topics.gasUsedByRelayHub:
-			result.Events = append(result.Events, "GasUsedByTransaction")
-		}
-	}
-
-	// Fallo silencioso en DEPLOY: la verificacion paso (Relayed) pero el CREATE interno revirtio en
-	// el constructor, asi que no hay ContractDeployed ni TransactionRelayed ni BadTransactionSent y
-	// el hub retorno OK. Sin esto se reportaria como exitoso y el cliente no se entera.
-	if sawRelayed && !sawContractDeployed && !sawTransactionRelayed && !sawBadTransaction {
-		executed := false
-		reason := "deploy reverted: contract constructor failed (no code created)"
-		result.Executed = &executed
-		result.Output = &reason
-	}
-
-	// El hub acepto y ejecuto: si no hubo ningun evento que diga lo contrario, se ejecuto.
-	if result.Executed == nil && (sawTransactionRelayed || sawContractDeployed) {
-		executed := true
-		result.Executed = &executed
-	}
-
-	log.Info(ctx, "relay.settled", map[string]interface{}{
-		"blockNumber":     result.BlockNumber,
-		"gasUsed":         result.GasUsed,
-		"executed":        result.Executed,
-		"errorCodeName":   result.ErrorCodeName,
-		"deployedAddress": result.DeployedAddress,
-	})
+	service.settle(ctx, hash, result.BlockNumber, result.GasUsed, outcome)
 
 	return result
 }

@@ -125,9 +125,9 @@ func TestInfoReportsEffectiveParameters(t *testing.T) {
 		t.Errorf("los parametros de expiracion deberian informarse en cero: %v / %v",
 			info["minExpirationSeconds"], info["expirationToleranceSeconds"])
 	}
-	// Tampoco reserva nonces.
+	// El reparto de nonces esta apagado por defecto, y se informa como tal.
 	if info["autoNonce"] != false {
-		t.Errorf("autoNonce = %v, este servicio no reserva nonces", info["autoNonce"])
+		t.Errorf("autoNonce = %v, el reparto esta apagado por defecto", info["autoNonce"])
 	}
 }
 

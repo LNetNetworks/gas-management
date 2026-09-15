@@ -14,6 +14,7 @@ const (
 	DefaultReorderWindowMs           = 3000
 	DefaultReorderMaxInflightPerUser = 16
 	DefaultReorderReceiptTimeoutMs   = 60000
+	DefaultReorderAutoNonceTicketMs  = 2000
 	DefaultDashboardBufferSize       = 500
 	DefaultLogLevel                  = "info"
 )
@@ -34,6 +35,7 @@ func DefaultReorderConfig() ReorderConfig {
 	return ReorderConfig{
 		Enabled:            false,
 		WindowMs:           DefaultReorderWindowMs,
+		AutoNonceTicketMs:  DefaultReorderAutoNonceTicketMs,
 		MaxInflightPerUser: DefaultReorderMaxInflightPerUser,
 		ReceiptTimeoutMs:   DefaultReorderReceiptTimeoutMs,
 	}
@@ -71,6 +73,8 @@ func LoadRuntimeBlocks(v *viper.Viper) (ReorderConfig, DashboardConfig, LogConfi
 	reorder.WindowMs = readInt(v, "reorder.windowMs", reorder.WindowMs, 0, &discarded)
 	reorder.MaxInflightPerUser = readInt(v, "reorder.maxInflightPerUser", reorder.MaxInflightPerUser, 1, &discarded)
 	reorder.ReceiptTimeoutMs = readInt(v, "reorder.receiptTimeoutMs", reorder.ReceiptTimeoutMs, 0, &discarded)
+	reorder.AutoNonce = readBool(v, "reorder.autoNonce", reorder.AutoNonce, &discarded)
+	reorder.AutoNonceTicketMs = readInt(v, "reorder.autoNonceTicketMs", reorder.AutoNonceTicketMs, 0, &discarded)
 
 	dashboard := DefaultDashboardConfig()
 	dashboard.Enabled = readBool(v, "dashboard.enabled", dashboard.Enabled, &discarded)

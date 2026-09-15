@@ -30,6 +30,8 @@ const (
 	CodeBadMetaTx                = "BAD_META_TX"
 	CodeSenderNotPermitted       = "SENDER_NOT_PERMITTED"
 	CodePermissioningUnavailable = "PERMISSIONING_UNAVAILABLE"
+	CodeBadNonce                 = "BAD_NONCE"
+	CodeTooManyInflight          = "TOO_MANY_INFLIGHT"
 	CodeSendFailed               = "SEND_FAILED"
 	CodeReceiptTimeout           = "RECEIPT_TIMEOUT"
 	CodeRelayError               = "RELAY_ERROR"
@@ -41,13 +43,31 @@ const (
 // Los dos salen del MISMO error, asi que las dos puertas no pueden dar motivos distintos para el
 // mismo rechazo.
 type Rejection struct {
-	cause error
-	code  string
+	cause   error
+	code    string
+	details map[string]interface{}
 }
 
 // Reject construye un rechazo a partir del error que lo origino.
 func Reject(cause error, code string) *Rejection {
 	return &Rejection{cause: cause, code: code}
+}
+
+// RejectWithDetails construye un rechazo que ademas lleva datos con los que el cliente puede
+// decidir sin parsear el texto del mensaje: el nonce esperado, cuantas metatx hay en vuelo.
+func RejectWithDetails(cause error, code string, details map[string]interface{}) *Rejection {
+	return &Rejection{cause: cause, code: code, details: details}
+}
+
+// Details son los datos adicionales del rechazo, o nil si no tiene.
+func (rejection *Rejection) Details() map[string]interface{} { return rejection.details }
+
+// DetailsOf expone el detalle de un error cuando es un rechazo que lo trae.
+func DetailsOf(err error) map[string]interface{} {
+	if rejection, ok := err.(*Rejection); ok {
+		return rejection.details
+	}
+	return nil
 }
 
 func (rejection *Rejection) Error() string { return rejection.cause.Error() }
@@ -195,8 +215,22 @@ func (service *RelaySignerService) PrepareMetaTx(ctx context.Context, rawTx stri
 // ReserveGasAndSend verifica el cupo de gas del bloque y envia la metatx, de forma atomica frente a
 // otros envios. Devuelve el hash de la transaccion envolvente.
 //
-// El lock se toma y se suelta ACA, no en el manejador: quien espere el receipt lo hace afuera.
+// Con el reordenamiento encendido, el envio pasa antes por el turno y la validacion del nonce; con
+// el apagado se entra derecho al camino de siempre, que es byte a byte el de antes de esta
+// capacidad. Ver design.md, D8.
 func (service *RelaySignerService) ReserveGasAndSend(ctx context.Context, prepared *PreparedMetaTx) (common.Hash, error) {
+	if service.reorderEnabled() {
+		return service.sendReordered(ctx, prepared)
+	}
+	return service.reserveGasAndSend(ctx, prepared)
+}
+
+// reserveGasAndSend es la seccion critica global: reservar el cupo de gas del bloque y enviar.
+//
+// El lock se toma y se suelta ACA, no en el manejador: quien espere el receipt lo hace afuera. Con
+// el reordenamiento encendido, el candado del usuario ya esta tomado cuando se llega aca -ese es el
+// orden fijo usuario -> global de D2-.
+func (service *RelaySignerService) reserveGasAndSend(ctx context.Context, prepared *PreparedMetaTx) (common.Hash, error) {
 	relayLock.Lock()
 	defer relayLock.Unlock()
 

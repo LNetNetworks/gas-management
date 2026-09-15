@@ -221,3 +221,50 @@ func discardedHas(discarded []DiscardedKey, key string) bool {
 	}
 	return false
 }
+
+// Las claves del reparto de nonces: ausentes toman su default -apagado- y un valor invalido se
+// descarta sin habilitar nada. Cubre parte de la tarea 6.1 de 04-add-nonce-reordering.
+func TestAutoNonceKeys(t *testing.T) {
+	t.Run("ausentes", func(t *testing.T) {
+		v := viperFor(t, "")
+		reorder, _, _, _, discarded := LoadRuntimeBlocks(v)
+
+		if reorder.AutoNonce {
+			t.Error("reorder.autoNonce debe quedar apagado por defecto")
+		}
+		if reorder.AutoNonceTicketMs != DefaultReorderAutoNonceTicketMs {
+			t.Errorf("reorder.autoNonceTicketMs por defecto = %d, se esperaba %d",
+				reorder.AutoNonceTicketMs, DefaultReorderAutoNonceTicketMs)
+		}
+		if len(discarded) != 0 {
+			t.Errorf("no se tenia que descartar ninguna clave: %v", discarded)
+		}
+	})
+
+	t.Run("valores explicitos", func(t *testing.T) {
+		v := viperFor(t, "[reorder]\nautoNonce = true\nautoNonceTicketMs = 500\n")
+		reorder, _, _, _, _ := LoadRuntimeBlocks(v)
+
+		if !reorder.AutoNonce || reorder.AutoNonceTicketMs != 500 {
+			t.Errorf("no se tomaron los valores explicitos: %+v", reorder)
+		}
+	})
+
+	t.Run("valor invalido", func(t *testing.T) {
+		v := viperFor(t, `[reorder]
+autoNonce = "si"
+autoNonceTicketMs = -1
+`)
+		reorder, _, _, _, discarded := LoadRuntimeBlocks(v)
+
+		if reorder.AutoNonce {
+			t.Error("un valor invalido no puede habilitar el reparto")
+		}
+		if reorder.AutoNonceTicketMs != DefaultReorderAutoNonceTicketMs {
+			t.Errorf("un valor invalido tiene que caer al default, quedo %d", reorder.AutoNonceTicketMs)
+		}
+		if len(discarded) != 2 {
+			t.Errorf("se esperaban dos claves descartadas, hubo %v", discarded)
+		}
+	})
+}
