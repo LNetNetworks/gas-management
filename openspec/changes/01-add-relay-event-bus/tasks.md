@@ -69,7 +69,7 @@
   test que una peticion con cuerpo ilegible igual emite su evento correlacionado
 - [x] 4.3 Generar el `metaTxId` al entrar al camino de relay y verificar con un test que dos metatx
   distintas no comparten identificador y que sus eventos no se mezclan
-- [ ] 4.4 Derivar con `context.WithoutCancel` el contexto de los eventos posteriores a la respuesta
+- [x] 4.4 Derivar con `context.WithoutCancel` el contexto de los eventos posteriores a la respuesta
   segun D2, y verificar con un test que un evento emitido tras retornar el handler conserva `reqId`
   y `metaTxId`
 - [x] 4.5 Recordar, al enviar la metatx, el `reqId` y el `metaTxId` contra el hash de la transaccion
