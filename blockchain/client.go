@@ -377,3 +377,53 @@ func (ec *Client) BalanceOf(ctx context.Context, address common.Address) (*big.I
 	}
 	return balance, nil
 }
+
+// El registro de permisos de la red (AccountIngress) publica, por nombre, la direccion de cada
+// contrato del permisionado. El de cuentas se guarda bajo el nombre "rules".
+//
+// Se lee con una llamada de contrato armada aca y no con bindings generados: es UNA funcion de
+// lectura, y generar bindings para ella agregaria un artefacto que hay que mantener al lado de un
+// contrato que no controlamos.
+const accountIngressABI = `[{"constant":true,"inputs":[{"name":"name","type":"bytes32"}],` +
+	`"name":"getContractAddress","outputs":[{"name":"","type":"address"}],` +
+	`"payable":false,"stateMutability":"view","type":"function"}]`
+
+// rulesContractName es "rules" en bytes32, rellenado con ceros a la derecha.
+func rulesContractName() [32]byte {
+	var name [32]byte
+	copy(name[:], "rules")
+	return name
+}
+
+// HasCode indica si esa direccion tiene codigo en esta cadena.
+//
+// Una direccion sin codigo no es un contrato: preguntarle algo devuelve vacio, y un decodificador
+// que interpreta vacio como "false" convertiria una direccion equivocada en un "no permitido"
+// silencioso.
+func (ec *Client) HasCode(address common.Address) (bool, error) {
+	code, err := ec.client.CodeAt(context.Background(), address, nil)
+	if err != nil {
+		msg := fmt.Sprintf("failed to read the code at %s", address.Hex())
+		return false, errors.CallBlockchainFailed.Wrapf(err, msg, -32603)
+	}
+	return len(code) > 0, nil
+}
+
+// ResolveAccountRules devuelve la direccion del contrato de reglas que publica el registro de
+// permisos de la red, o la direccion cero si el registro no tiene ninguno registrado.
+func (ec *Client) ResolveAccountRules(ingress common.Address) (common.Address, error) {
+	parsed, err := abi.JSON(strings.NewReader(accountIngressABI))
+	if err != nil {
+		return common.Address{}, errors.FailedContract.Wrapf(err, "can't parse the AccountIngress ABI", -32603)
+	}
+
+	// El resultado se recibe en un puntero al tipo concreto: esta version de go-ethereum desempaqueta
+	// asi, no en una lista de valores.
+	contract := bind.NewBoundContract(ingress, parsed, ec.client, ec.client, ec.client)
+	var resolved common.Address
+	if err := contract.Call(&bind.CallOpts{}, &resolved, "getContractAddress", rulesContractName()); err != nil {
+		msg := fmt.Sprintf("failed to resolve the account rules contract from the AccountIngress %s", ingress.Hex())
+		return common.Address{}, errors.CallBlockchainFailed.Wrapf(err, msg, -32603)
+	}
+	return resolved, nil
+}

@@ -67,6 +67,32 @@ type CorsConfig struct {
 	AllowedOrigins []string
 }
 
+// ValidationConfig gobierna la validacion del sufijo del modelo de gas. Las dos exigencias arrancan
+// apagadas: encenderlas cambia QUE metatx se aceptan, que es lo mas sensible que se puede cambiar
+// sin avisar. En el relayer de referencia el default es al reves. Ver design.md de
+// 05-add-metatx-validation, D3.
+type ValidationConfig struct {
+	EnforceNodeAddress bool
+	EnforceExpiration  bool
+	// MinExpirationSeconds es la ventana de vigencia minima que le tiene que quedar a la metatx al
+	// llegar, y ExpirationToleranceSeconds con cuanta tolerancia se aplica ese minimo. Solo rigen
+	// con EnforceExpiration en true.
+	MinExpirationSeconds       int
+	ExpirationToleranceSeconds int
+}
+
+// PermissioningConfig son las claves del bloque [security] que gobiernan de donde sale el contrato
+// de reglas y cuanto vale lo cacheado.
+//
+// Viven aparte de SecurityConfig porque se leen clave por clave, fuera del Unmarshal: un
+// `accountRulesCacheMs = "mucho"` no puede llevarse puesto el arranque entero.
+type PermissioningConfig struct {
+	// AccountIngressAddress es el registro de permisos de la red. Sin default: un default no vacio
+	// consultaria la cadena en un arranque que hoy no lo hace.
+	AccountIngressAddress string
+	AccountRulesCacheMs   int
+}
+
 // Config es la configuracion del servicio.
 //
 // Los tres bloques nuevos llevan `mapstructure:"-"` a proposito: NO se decodifican con el
@@ -82,4 +108,8 @@ type Config struct {
 	Dashboard   DashboardConfig   `mapstructure:"-"`
 	Log         LogConfig         `mapstructure:"-"`
 	CORS        CorsConfig        `mapstructure:"-"`
+	Validation  ValidationConfig  `mapstructure:"-"`
+	// Permissioning son claves del bloque [security], leidas aparte por el mismo motivo que los
+	// bloques nuevos.
+	Permissioning PermissioningConfig `mapstructure:"-"`
 }

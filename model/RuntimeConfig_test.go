@@ -268,3 +268,104 @@ autoNonceTicketMs = -1
 		}
 	})
 }
+
+// El bloque [validation] y las claves de permisionado: ausentes toman su default -las dos
+// exigencias apagadas- y un valor invalido se descarta sin habilitar ninguna. Cubre las tareas 1.1
+// y 1.2 de 05-add-metatx-validation.
+func TestValidationBlocks(t *testing.T) {
+	t.Run("ausentes", func(t *testing.T) {
+		validation, permissioning, discarded := LoadValidationBlocks(viperFor(t, ""))
+
+		if validation.EnforceNodeAddress || validation.EnforceExpiration {
+			t.Errorf("las dos exigencias tienen que quedar apagadas por defecto: %+v", validation)
+		}
+		if validation.MinExpirationSeconds != DefaultMinExpirationSeconds ||
+			validation.ExpirationToleranceSeconds != DefaultExpirationToleranceSeconds {
+			t.Errorf("los defaults de expiracion no son los esperados: %+v", validation)
+		}
+		if permissioning.AccountIngressAddress != "" {
+			t.Errorf("el registro de permisos no tiene default, quedo %q", permissioning.AccountIngressAddress)
+		}
+		if permissioning.AccountRulesCacheMs != DefaultAccountRulesCacheMs {
+			t.Errorf("la vigencia por defecto = %d, se esperaba %d",
+				permissioning.AccountRulesCacheMs, DefaultAccountRulesCacheMs)
+		}
+		if len(discarded) != 0 {
+			t.Errorf("no se tenia que descartar ninguna clave: %v", discarded)
+		}
+	})
+
+	t.Run("valores explicitos", func(t *testing.T) {
+		v := viperFor(t, `[validation]
+enforceNodeAddress = true
+enforceExpiration = true
+minExpirationSeconds = 120
+expirationToleranceSeconds = 5
+
+[security]
+accountIngressAddress = "0x0000000000000000000000000000000000008888"
+accountRulesCacheMs = 1000
+`)
+		validation, permissioning, discarded := LoadValidationBlocks(v)
+
+		if !validation.EnforceNodeAddress || !validation.EnforceExpiration ||
+			validation.MinExpirationSeconds != 120 || validation.ExpirationToleranceSeconds != 5 {
+			t.Errorf("no se tomaron los valores explicitos: %+v", validation)
+		}
+		if permissioning.AccountIngressAddress != "0x0000000000000000000000000000000000008888" ||
+			permissioning.AccountRulesCacheMs != 1000 {
+			t.Errorf("no se tomaron los valores de permisionado: %+v", permissioning)
+		}
+		if len(discarded) != 0 {
+			t.Errorf("no se tenia que descartar ninguna clave: %v", discarded)
+		}
+	})
+
+	t.Run("valores invalidos", func(t *testing.T) {
+		v := viperFor(t, `[validation]
+enforceExpiration = "si"
+minExpirationSeconds = -3
+
+[security]
+accountIngressAddress = "no-es-una-direccion"
+accountRulesCacheMs = "mucho"
+`)
+		validation, permissioning, discarded := LoadValidationBlocks(v)
+
+		if validation.EnforceExpiration {
+			t.Error("un valor invalido no puede habilitar una exigencia")
+		}
+		if validation.MinExpirationSeconds != DefaultMinExpirationSeconds {
+			t.Errorf("el minimo invalido tiene que caer al default, quedo %d", validation.MinExpirationSeconds)
+		}
+		if permissioning.AccountIngressAddress != "" {
+			t.Errorf("una direccion invalida se descarta, quedo %q", permissioning.AccountIngressAddress)
+		}
+		if permissioning.AccountRulesCacheMs != DefaultAccountRulesCacheMs {
+			t.Errorf("la vigencia invalida tiene que caer al default, quedo %d", permissioning.AccountRulesCacheMs)
+		}
+		if len(discarded) != 4 {
+			t.Errorf("se esperaban cuatro claves descartadas, hubo %v", discarded)
+		}
+	})
+}
+
+// El limite efectivo de vigencia es el minimo menos la tolerancia, acotado a cero: una tolerancia
+// mayor que el minimo no puede volverse un limite negativo. Cubre la tarea 1.3.
+func TestExpirationFloorIsNeverNegative(t *testing.T) {
+	casos := []struct {
+		minimo, tolerancia, esperado int
+	}{
+		{300, 2, 298},
+		{300, 0, 300},
+		{2, 5, 0},
+		{0, 10, 0},
+	}
+	for _, caso := range casos {
+		validation := ValidationConfig{MinExpirationSeconds: caso.minimo, ExpirationToleranceSeconds: caso.tolerancia}
+		if floor := validation.ExpirationFloor(); floor != caso.esperado {
+			t.Errorf("minimo %d con tolerancia %d -> %d, se esperaba %d",
+				caso.minimo, caso.tolerancia, floor, caso.esperado)
+		}
+	}
+}

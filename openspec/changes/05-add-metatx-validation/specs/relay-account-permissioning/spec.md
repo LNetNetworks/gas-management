@@ -67,6 +67,28 @@ explicita: dar de alta una cuenta tarda hasta ese plazo en verse.
 - **WHEN** una cuenta se da de alta en el contrato de reglas y se consulta despues del plazo
 - **THEN** el servicio refleja el alta
 
+### Requirement: Exigir el chequeo sin allowlist que aplicar no deja pasar
+
+Cuando el chequeo de permisos sobre el sender esta habilitado y el sistema no pudo resolver ningun
+contrato de reglas, MUST rechazar la metatx indicando que no se pudo verificar el permiso, y el
+motivo SHALL decir como resolverlo. MUST NOT relayarla.
+
+Es el mismo criterio que el de un allowlist ilegible: si alguien pidio el chequeo y no hay nada
+contra que chequear, dejar pasar seria abrir la puerta creyendo lo contrario. La diferencia con la
+red sin permisionado es justamente que ahi nadie pidio el chequeo.
+
+#### Scenario: Chequeo habilitado en una red sin contrato de reglas
+
+- **WHEN** el chequeo sobre el sender esta habilitado y no se pudo resolver ningun contrato de reglas
+- **THEN** la metatx se rechaza indicando que no se pudo verificar el permiso
+- **AND** el motivo indica que hay que configurar la direccion, el registro, o apagar el chequeo
+- **AND** no se envia nada a la cadena
+
+#### Scenario: Chequeo deshabilitado en una red sin contrato de reglas
+
+- **WHEN** el chequeo sobre el sender esta deshabilitado y no hay contrato de reglas
+- **THEN** la metatx se relaya con normalidad
+
 ### Requirement: Un allowlist que no se puede leer no deja pasar
 
 Cuando el chequeo de permisos sobre el sender esta habilitado y la consulta al contrato de reglas

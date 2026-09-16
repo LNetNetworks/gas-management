@@ -56,6 +56,12 @@ type RelaySignerService struct {
 	userLocks      map[string]*userLock
 	userLocksMutex sync.Mutex
 	// handouts son los nonces entregados y todavia sin usar, por usuario. Ver handout.go.
+	// rules es el contrato de reglas resuelto, y nodePermitted lo que se sabe del nodo que relaya.
+	// Se resuelven una vez al arrancar. Ver permissioning.go.
+	rules         *accountRules
+	nodePermitted *bool
+	rulesMutex    sync.Mutex
+
 	handouts map[string]*handoutTicket
 	// openTickets es, por usuario, el ticket cuyo numero ya se entrego y espera su metatx.
 	openTickets   map[string]*handoutTicket
@@ -91,8 +97,17 @@ func (service *RelaySignerService) Init(_config *model.Config) error {
 	service.senders = make(map[string]*nonceEntry)
 	service.metaTx = make(map[common.Hash]*metaTxEntry)
 
+	// Con el chequeo de permisos pedido tiene que haber de donde sacar el contrato de reglas: la
+	// direccion escrita en la configuracion, o el registro de permisos de la red del que se
+	// resuelve. Sin ninguna de las dos no hay allowlist que aplicar, y arrancar igual seria decir
+	// que se chequea sin chequear nada.
+	//
+	// Antes solo se aceptaba la direccion configurada, lo que dejaba la resolucion por el registro
+	// sin forma de usarse: el servicio no llegaba a arrancar para resolverla.
 	if service.Config.Security.PermissionsEnabled {
-		if !(common.IsHexAddress(service.Config.Security.AccountContractAddress)) {
+		hasAddress := common.IsHexAddress(service.Config.Security.AccountContractAddress)
+		hasIngress := common.IsHexAddress(service.Config.Permissioning.AccountIngressAddress)
+		if !hasAddress && !hasIngress {
 			return errors.InvalidAddress.New("Invalid Account Smart Contract Address", -32608)
 		}
 	}
@@ -474,16 +489,9 @@ func (service *RelaySignerService) VerifyGasLimit(ctx context.Context, gasLimit 
 
 // VerifySender sent a transaction
 func (service *RelaySignerService) VerifySender(ctx context.Context, sender common.Address, id json.RawMessage) (bool, error) {
-	client := new(bl.Client)
-	err := client.Connect(service.Config.Application.NodeURL)
-	if err != nil {
-		return false, err
-	}
-	defer client.Close()
-
-	contractAddress := common.HexToAddress(service.Config.Security.AccountContractAddress)
-
-	isPermitted, err := client.AccountPermitted(contractAddress, sender)
+	// El contrato de reglas es el que se resolvio al arrancar -configurado o publicado por la red- y
+	// el resultado se cachea por cuenta. Ver permissioning.go.
+	isPermitted, err := service.AccountPermitted(ctx, sender)
 	if err != nil {
 		return false, err
 	}

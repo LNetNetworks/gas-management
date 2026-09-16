@@ -15,6 +15,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"time"
@@ -55,6 +56,12 @@ func main() {
 		return
 	}
 
+	// De donde sale el contrato de reglas se resuelve UNA vez, aca: es una propiedad de la red, no
+	// de cada peticion. No aborta el arranque en ningun caso -ni con el nodo caido, ni con este nodo
+	// sin permiso-, porque un binario que no levanta diagnostica peor que uno que lo informa en
+	// `GET /info`. Ver design.md de 05-add-metatx-validation, D5 y D6.
+	relaySignerService.ResolveAccountRules(context.Background())
+
 	relayController = new(controller.RelayController)
 	relayController.Init(config, relaySignerService)
 	done := make(chan interface{})
@@ -80,6 +87,9 @@ func getConfigFromFile() *model.Config {
 	// invalido en cualquiera de ellos cae a su default y se registra, pero no aborta el arranque.
 	var discarded []model.DiscardedKey
 	c.Reorder, c.Dashboard, c.Log, c.CORS, discarded = model.LoadRuntimeBlocks(v)
+	validation, permissioning, descartadasValidacion := model.LoadValidationBlocks(v)
+	c.Validation, c.Permissioning = validation, permissioning
+	discarded = append(discarded, descartadasValidacion...)
 	for _, key := range discarded {
 		log.GeneralLogger.Printf("config: se descarto %s = %v (%s), se usa el valor por defecto",
 			key.Key, key.Value, key.Reason)
