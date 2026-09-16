@@ -117,7 +117,7 @@
   cada uno conserva su orden de nonce
 - [x] 7.6 Verificar el caso de `maxInflightPerUser` excedido y el de una metatx que vence en el
   buffer: motivo correcto en la respuesta, y nada gastado en la cadena
-- [ ] 7.7 Correr `node_relayer/examples/nonce-stress.ts --n 6` apuntado a este servicio y verificar
+- [x] 7.7 Correr `node_relayer/examples/nonce-stress.ts --n 6` apuntado a este servicio y verificar
   que da el mismo resultado que contra el relayer de Node
 - [x] 7.8 Con el monitor de 03 abierto, reproducir una rafaga desordenada y comparar con la corrida
   de referencia de `node_relayer/DASHBOARD.md` -llegada `72,68,70,67,71,69`, envio `67..72`, 4
