@@ -32,6 +32,9 @@ const (
 	CodePermissioningUnavailable = "PERMISSIONING_UNAVAILABLE"
 	CodeBadNonce                 = "BAD_NONCE"
 	CodeTooManyInflight          = "TOO_MANY_INFLIGHT"
+	CodeWrongNodeAddress         = "WRONG_NODE_ADDRESS"
+	CodeExpired                  = "EXPIRED"
+	CodeExpirationTooLow         = "EXPIRATION_TOO_LOW"
 	CodeSendFailed               = "SEND_FAILED"
 	CodeReceiptTimeout           = "RECEIPT_TIMEOUT"
 	CodeRelayError               = "RELAY_ERROR"
@@ -165,6 +168,13 @@ func (service *RelaySignerService) PrepareMetaTx(ctx context.Context, rawTx stri
 	metaTxGasLimit := uint64((len(decodeTransaction.Data())*105)+300000) + decodeTransaction.Gas()
 
 	log.Info(ctx, "relay.decoded", DecodedFields(decodeTransaction, message.From(), metaTxGasLimit))
+
+	// El sufijo se valida DESPUES de relay.decoded -para que una metatx rechazada deje primero la
+	// traza de lo que traia- y ANTES del chequeo de permisos, que consulta la cadena: no tiene
+	// sentido pagar esa consulta por una metatx que ya se sabe invalida. Ver design.md, D1.
+	if err := service.validateGasModelSuffix(ctx, decodeTransaction); err != nil {
+		return nil, err
+	}
 
 	if service.Config.Security.PermissionsEnabled {
 		permitted, err := service.VerifySender(ctx, message.From(), nil)

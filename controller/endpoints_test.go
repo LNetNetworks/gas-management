@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,18 @@ func getJSON(t *testing.T, mux *http.ServeMux, path string) (int, map[string]int
 
 // --------------------------------------------------------------------------- GET /info
 
+// infoFields son los campos que `GET /info` informa siempre. La lista vive en un solo lugar: dos
+// copias del contrato terminan discrepando, y el sintoma seria un campo que se dejo de informar sin
+// que ningun test lo note.
+var infoFields = []string{
+	"nodeAddress", "relayHubAddress", "relayHubSource", "relayHubProxyAddress",
+	"chainId", "rpcUrl", "nodeBalance", "currentGasLimit",
+	"accountRulesAddress", "accountRulesSource", "nodePermitted", "enforceAccountRules",
+	"minExpirationSeconds", "expirationToleranceSeconds",
+	"reorderEnabled", "reorderWindowMs", "maxInflightPerUser", "receiptTimeoutMs",
+	"autoNonce", "autoNonceTicketMs",
+}
+
 // TestInfoReportsIdentityAndAddresses cubre las tareas 3.1, 3.2 y 3.3: identidad, direcciones con
 // su origen, y el estado operativo que se lee de la cadena.
 func TestInfoReportsIdentityAndAddresses(t *testing.T) {
@@ -44,14 +57,7 @@ func TestInfoReportsIdentityAndAddresses(t *testing.T) {
 		t.Fatalf("GET /info -> %d", status)
 	}
 
-	for _, field := range []string{
-		"nodeAddress", "relayHubAddress", "relayHubSource", "relayHubProxyAddress",
-		"chainId", "rpcUrl", "nodeBalance", "currentGasLimit",
-		"accountRulesAddress", "accountRulesSource", "nodePermitted", "enforceAccountRules",
-		"minExpirationSeconds", "expirationToleranceSeconds",
-		"reorderEnabled", "reorderWindowMs", "maxInflightPerUser", "receiptTimeoutMs",
-		"autoNonce", "autoNonceTicketMs",
-	} {
+	for _, field := range infoFields {
 		if _, present := info[field]; !present {
 			t.Errorf("falta el campo %q: %v", field, info)
 		}
@@ -274,6 +280,9 @@ func TestInfoReportsPermissioningEnabled(t *testing.T) {
 	controller := relayingController(t, node.URL)
 	controller.Config.Security.PermissionsEnabled = true
 	controller.Config.Security.AccountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
+	// La direccion se acaba de configurar: se resuelve de nuevo, como haria el arranque con esa
+	// configuracion completa.
+	controller.RelaySignerService.ResolveAccountRules(context.Background())
 	mux := http.NewServeMux()
 	controller.Routes(mux)
 

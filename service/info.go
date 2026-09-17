@@ -37,8 +37,8 @@ type ServiceInfo struct {
 	NodePermitted       *bool   `json:"nodePermitted"`
 	EnforceAccountRules bool    `json:"enforceAccountRules"`
 
-	// Este servicio no valida la expiracion del modelo de gas, asi que informa que no exige
-	// ninguna ventana minima. No se omiten: un cliente que los lee tiene que poder saberlo.
+	// La ventana de vigencia que se exige de verdad. Con la exigencia apagada van en cero: no se
+	// omiten, porque un cliente que los lee tiene que poder saber que no se exige ninguna.
 	MinExpirationSeconds       int `json:"minExpirationSeconds"`
 	ExpirationToleranceSeconds int `json:"expirationToleranceSeconds"`
 
@@ -101,11 +101,20 @@ func (service *RelaySignerService) Info(ctx context.Context) ServiceInfo {
 		hub := config.Application.RelayHubContractAddress.Hex()
 		info.RelayHubAddress = &hub
 	}
-	if config.Security.PermissionsEnabled && config.Security.AccountContractAddress != "" {
-		rules := config.Security.AccountContractAddress
-		source := sourceConfig
-		info.AccountRulesAddress = &rules
-		info.AccountRulesSource = &source
+	// La direccion del contrato de reglas y su origen salen de lo que se RESOLVIO al arrancar, no de
+	// lo que dice el archivo: dos operadores que miran el mismo campo tienen que poder distinguir una
+	// direccion que alguien escribio de una que publica la red. Si esta red no expone ninguno, los
+	// dos campos van sin valor.
+	info.AccountRulesAddress = service.AccountRulesAddress()
+	info.AccountRulesSource = service.AccountRulesSource()
+	info.NodePermitted = service.NodePermitted()
+
+	// El minimo y la tolerancia se informan como la exigencia VIGENTE: con la exigencia apagada no
+	// hay ventana que respetar, y publicar el numero configurado haria que un cliente firme para
+	// cumplir una regla que no existe. Ver design.md de 05-add-metatx-validation, D3.
+	if config.Validation.EnforceExpiration {
+		info.MinExpirationSeconds = config.Validation.MinExpirationSeconds
+		info.ExpirationToleranceSeconds = config.Validation.ExpirationToleranceSeconds
 	}
 
 	nodeAddress, err := service.NodeAddress()

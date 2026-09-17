@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -342,6 +343,9 @@ func relayMuxWith(t *testing.T, receipt string, opts mockNodeOptions, tune func(
 	controller := relayingController(t, node.URL)
 	if tune != nil {
 		tune(controller)
+		// Tocar la configuracion despues de construir el servicio obliga a resolver de nuevo: en el
+		// arranque real la configuracion esta completa antes de que se resuelva nada.
+		controller.RelaySignerService.ResolveAccountRules(context.Background())
 	}
 	mux := http.NewServeMux()
 	controller.Routes(mux)

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/viper"
 )
 
@@ -17,6 +18,12 @@ const (
 	DefaultReorderAutoNonceTicketMs  = 2000
 	DefaultDashboardBufferSize       = 500
 	DefaultLogLevel                  = "info"
+
+	// Defaults de la validacion del sufijo del modelo de gas y de la resolucion del permisionado.
+	// Los dos primeros son los medidos en el relayer de referencia.
+	DefaultMinExpirationSeconds       = 300
+	DefaultExpirationToleranceSeconds = 2
+	DefaultAccountRulesCacheMs        = 30000
 )
 
 // Niveles de log aceptados por `log.level`, de menor a mayor severidad.
@@ -206,4 +213,77 @@ func toBool(raw interface{}) (bool, bool) {
 		return parsed, true
 	}
 	return false, false
+}
+
+// DefaultValidationConfig devuelve el bloque [validation] como si estuviera ausente.
+func DefaultValidationConfig() ValidationConfig {
+	return ValidationConfig{
+		EnforceNodeAddress:         false,
+		EnforceExpiration:          false,
+		MinExpirationSeconds:       DefaultMinExpirationSeconds,
+		ExpirationToleranceSeconds: DefaultExpirationToleranceSeconds,
+	}
+}
+
+// DefaultPermissioningConfig devuelve las claves de permisionado como si estuvieran ausentes.
+func DefaultPermissioningConfig() PermissioningConfig {
+	return PermissioningConfig{AccountRulesCacheMs: DefaultAccountRulesCacheMs}
+}
+
+// LoadValidationBlocks lee [validation] y las claves nuevas de [security], clave por clave.
+//
+// Va aparte de LoadRuntimeBlocks para no cambiarle la firma a algo que ya usan varios llamadores,
+// pero sigue exactamente el mismo criterio: la clave que no sirve cae a su default, se devuelve en
+// `discarded` y el arranque no se interrumpe.
+func LoadValidationBlocks(v *viper.Viper) (ValidationConfig, PermissioningConfig, []DiscardedKey) {
+	var discarded []DiscardedKey
+
+	validation := DefaultValidationConfig()
+	validation.EnforceNodeAddress = readBool(v, "validation.enforceNodeAddress", validation.EnforceNodeAddress, &discarded)
+	validation.EnforceExpiration = readBool(v, "validation.enforceExpiration", validation.EnforceExpiration, &discarded)
+	validation.MinExpirationSeconds = readInt(v, "validation.minExpirationSeconds", validation.MinExpirationSeconds, 0, &discarded)
+	validation.ExpirationToleranceSeconds = readInt(v, "validation.expirationToleranceSeconds",
+		validation.ExpirationToleranceSeconds, 0, &discarded)
+
+	permissioning := DefaultPermissioningConfig()
+	permissioning.AccountIngressAddress = readAddress(v, "security.accountIngressAddress", &discarded)
+	permissioning.AccountRulesCacheMs = readInt(v, "security.accountRulesCacheMs", permissioning.AccountRulesCacheMs, 0, &discarded)
+
+	return validation, permissioning, discarded
+}
+
+// readAddress lee una direccion. Una que no tiene forma de direccion se descarta: el default es
+// vacio, o sea que el registro de permisos no se consulta, que es como se comporta el servicio hoy.
+func readAddress(v *viper.Viper, key string, discarded *[]DiscardedKey) string {
+	if !v.IsSet(key) {
+		return ""
+	}
+	raw := v.Get(key)
+	value, ok := raw.(string)
+	if !ok {
+		*discarded = append(*discarded, DiscardedKey{Key: key, Value: raw, Reason: "no es texto"})
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if !common.IsHexAddress(value) {
+		*discarded = append(*discarded, DiscardedKey{Key: key, Value: raw, Reason: "no es una direccion"})
+		return ""
+	}
+	return value
+}
+
+// ExpirationFloor es la vigencia minima que el servicio exige de verdad: el minimo menos la
+// tolerancia, acotado a cero.
+//
+// Una tolerancia mayor que el minimo no puede volverse un limite negativo, que aceptaria una metatx
+// ya vencida por la puerta de atras. Ver design.md, D8.
+func (validation ValidationConfig) ExpirationFloor() int {
+	floor := validation.MinExpirationSeconds - validation.ExpirationToleranceSeconds
+	if floor < 0 {
+		return 0
+	}
+	return floor
 }

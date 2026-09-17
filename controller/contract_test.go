@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -38,11 +39,16 @@ var eventContract = map[string][]string{
 // commonFields van en todo evento de una metatx, ademas de sus campos propios.
 var commonFields = []string{"ts", "level", "event", "instanceId", "seq", "metaTxId"}
 
-// deferredEvents son los que el contrato define pero cuya emision corresponde al reordenamiento de
-// nonces y a su watcher de receipts, que todavia no existen.
-var deferredEvents = map[string]bool{
-	"relay.held": true, "relay.turn": true,
-	"relay.settled": true, "relay.settle_failed": true,
+// reorderingEvents son los que solo emite el reordenamiento de nonces. Este test corre con el
+// reordenamiento APAGADO, asi que no pueden aparecer: si aparecieran, el flag no estaria gobernando
+// lo que dice gobernar.
+//
+// `relay.settled` NO esta aca: se emite al resolver un receipt desde que existe `POST /relay`, y
+// ademas lo emite el watcher. Lo estuvo hasta que el reordenamiento lo volvio alcanzable, y dejarlo
+// habria convertido este guardian en una afirmacion falsa que pasaba solo porque este escenario no
+// recorre ese camino.
+var reorderingEvents = map[string]bool{
+	"relay.held": true, "relay.turn": true, "relay.settle_failed": true,
 }
 
 // mockNodeOptions son las variantes del nodo simulado que hacen falta para probar los rechazos.
@@ -184,6 +190,10 @@ func relayingController(t *testing.T, nodeURL string) *RelayController {
 		t.Fatalf("no se pudo inicializar el servicio: %v", err)
 	}
 
+	// El arranque real resuelve de donde sale el contrato de reglas una sola vez, antes de atender:
+	// los tests hacen lo mismo para no probar contra un servicio a medio inicializar.
+	relaySignerService.ResolveAccountRules(context.Background())
+
 	controller := new(RelayController)
 	controller.Init(config, relaySignerService)
 	return controller
@@ -231,6 +241,14 @@ func TestEventContract(t *testing.T) {
 	// Y una rechazada, para que el contrato de relay.rejected tambien quede recorrido.
 	controller.SignTransaction(httptest.NewRecorder(), rawTxRequest("0xdeadbee"))
 
+	// Una por `POST /relay`, que espera el receipt: es el camino por el que sale relay.settled, y
+	// sin recorrerlo el contrato de ese evento no lo comprueba nadie.
+	mux := http.NewServeMux()
+	controller.Routes(mux)
+	sincronica := httptest.NewRecorder()
+	mux.ServeHTTP(sincronica, httptest.NewRequest(http.MethodPost, "/relay",
+		strings.NewReader(`{"rawTx":"`+signedRawTx(t, &to, data, 35, 200000)+`"}`)))
+
 	seen := make(map[string]bool)
 	for _, event := range events.Replay(0) {
 		expected, known := eventContract[event.Name()]
@@ -239,8 +257,8 @@ func TestEventContract(t *testing.T) {
 		}
 		seen[event.Name()] = true
 
-		if deferredEvents[event.Name()] {
-			t.Errorf("%s no deberia emitirse todavia: su emision corresponde al reordenamiento de nonces", event.Name())
+		if reorderingEvents[event.Name()] {
+			t.Errorf("%s no puede emitirse con el reordenamiento apagado", event.Name())
 		}
 		for _, field := range append(expected, commonFields...) {
 			if _, present := event.Line[field]; !present {
@@ -253,8 +271,9 @@ func TestEventContract(t *testing.T) {
 		}
 	}
 
-	// Los cinco que esta capacidad si emite tienen que haber aparecido, o el test no probo nada.
-	for _, name := range []string{"relay.received", "relay.decoded", "relay.sent", "relay.rejected", "relay.hub_rejected"} {
+	// Los que este camino si emite tienen que haber aparecido, o el test no probo nada.
+	for _, name := range []string{"relay.received", "relay.decoded", "relay.sent", "relay.rejected",
+		"relay.hub_rejected", "relay.settled"} {
 		if !seen[name] {
 			t.Errorf("no se emitio %s; se vieron %v", name, eventNames())
 		}
@@ -263,7 +282,7 @@ func TestEventContract(t *testing.T) {
 
 // TestBurstKeepsEachMetaTxSeparate cubre la tarea 6.2: en una rafaga, cada metatx tiene su
 // relay.received, su relay.decoded y luego su relay.sent o su relay.rejected, sin mezclarse. Y no
-// aparece ningun relay.held ni relay.turn, porque el reordenamiento todavia no existe.
+// aparece ningun relay.held ni relay.turn, porque el reordenamiento esta apagado.
 func TestBurstKeepsEachMetaTxSeparate(t *testing.T) {
 	withBus(t)
 

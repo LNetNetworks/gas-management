@@ -129,19 +129,61 @@ servicio todavia no tiene:
 
 | Campo | Node | Aca | Por que |
 |---|---|---|---|
-| `minExpirationSeconds`, `expirationToleranceSeconds` (`/info`) | la ventana exigida | siempre `0` | este servicio no valida la expiracion del modelo de gas |
 | `relayHubSource` (`/info`) | `config` o `proxy` | siempre `proxy` | la direccion siempre se resuelve del proxy |
 | `reorderEnabled`, `receiptTimeoutMs` (`/info`) | no existen | presentes | parametros propios de este servicio |
 | `simulated` (`/relay`) | segun hubo pre-chequeo | siempre `false` | no hay pre-chequeo por simulacion con `eth_call` |
 | `errorCode` (`/relay`) | de la simulacion o del hub | solo del hub | idem |
 | `output` (`/relay`) | return data, o el motivo del revert | el motivo del revert, o sin valor | el return data de una llamada exitosa todavia no se expone |
 
-De los trece codigos de error del catalogo de Node, este servicio produce nueve: `BAD_RAW_TX`,
-`BAD_META_TX`, `BAD_NONCE`, `TOO_MANY_INFLIGHT`, `SENDER_NOT_PERMITTED`,
-`PERMISSIONING_UNAVAILABLE`, `SEND_FAILED`, `RECEIPT_TIMEOUT` y `RELAY_ERROR`. Los cuatro que
-faltan corresponden a validaciones que todavia no existen (expiracion, direccion del nodo,
-simulacion). Lo que no tiene codigo propio usa `RELAY_ERROR`: no se inventan codigos fuera del
-catalogo.
+De los trece codigos de error del catalogo de Node, este servicio produce doce: `BAD_RAW_TX`,
+`BAD_META_TX`, `BAD_NONCE`, `WRONG_NODE_ADDRESS`, `EXPIRED`, `EXPIRATION_TOO_LOW`,
+`TOO_MANY_INFLIGHT`, `SENDER_NOT_PERMITTED`, `PERMISSIONING_UNAVAILABLE`, `SEND_FAILED`,
+`RECEIPT_TIMEOUT` y `RELAY_ERROR`. El que falta es `SIMULATION_FAILED`, que corresponde al
+pre-chequeo por simulacion, todavia inexistente. Lo que no tiene codigo propio usa `RELAY_ERROR`:
+no se inventan codigos fuera del catalogo.
+
+### Validacion del sufijo del modelo de gas
+
+El modelo de gas agrega al final del `data` de la metatx la direccion del nodo que tiene que
+relayarla y su expiracion. Con `validation.enforceNodeAddress` el servicio rechaza la metatx
+dirigida a **otro** writer node, y con `validation.enforceExpiration` la vencida y la que llega sin
+la ventana minima. Los dos rechazos ocurren **antes** de gastar una transaccion del writer node: sin
+ellos, la descubre el hub on-chain con la transaccion ya consumida.
+
+El minimo se exige con tolerancia (`expirationToleranceSeconds`, 2 s por defecto). Quien firma
+`ahora + 300` llega con 298 -se pierde la latencia de la peticion y el redondeo a segundos de cada
+lado-, asi que exigir el valor exacto rechazaria justo al cliente que hizo lo correcto.
+
+Las dos exigencias arrancan **apagadas**, al reves que en el relayer de Node: encenderlas cambia que
+metatx se aceptan. Con las dos en `false`, el servicio acepta exactamente lo mismo que antes. Por lo
+mismo, `GET /info` informa `minExpirationSeconds` y `expirationToleranceSeconds` en cero mientras la
+exigencia este apagada: publicar un numero que no se aplica haria que un cliente firme para cumplir
+una regla que no existe.
+
+Un sufijo ausente, corto o con una expiracion que no entra en un entero **no** rechaza nada: lo que
+se valida es un sufijo presente y legible que dice algo inaceptable.
+
+### De donde sale el contrato de reglas
+
+Si `security.accountContractAddress` esta configurada, se usa esa -es lo que hace un despliegue
+actual, y por eso actualizar el binario no le cambia el comportamiento-. Si no lo esta, se resuelve
+del registro de permisos de la red (`security.accountIngressAddress`). `GET /info` informa cual de
+las dos fuentes se uso: una direccion equivocada es indistinguible de una correcta si no se sabe de
+donde salio.
+
+Una red que no expone contrato de reglas -sin registro, o sin contrato publicado- simplemente no
+tiene permisionado de cuentas, y el servicio arranca y relaya igual. Pero si `permissionsEnabled`
+esta en `true` y **no** se pudo resolver ninguno, la metatx se rechaza con
+`PERMISSIONING_UNAVAILABLE`: si alguien pidio el chequeo y no hay nada contra que chequear, dejar
+pasar seria abrir la puerta creyendo lo contrario.
+
+El resultado del chequeo se cachea por cuenta (`security.accountRulesCacheMs`, 30 s por defecto).
+El intercambio es explicito: sin cache, cada metatx paga una consulta a la cadena; con cache, dar de
+alta una cuenta tarda hasta ese plazo en verse.
+
+Al arrancar se comprueba ademas si **este** nodo esta permitido y se informa en `GET /info`. No
+impide arrancar: un nodo no permitido relaya sin error aparente y todas sus metatx fallan on-chain,
+y eso se diagnostica mejor viendolo en `/info` que con un binario que no levanta.
 
 ### Reordenamiento de nonces
 

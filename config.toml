@@ -15,6 +15,12 @@ agent = "Peru123."
 [security]
 permissionsEnabled = false
 accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
+# Opcionales. `accountIngressAddress` es el registro de permisos de la red, del que se resuelve el
+# contrato de reglas CUANDO NO hay `accountContractAddress`: la direccion configurada tiene
+# precedencia, asi que un despliegue que ya la tiene no cambia de comportamiento. Vacio -el
+# default- no consulta ningun registro.
+# accountIngressAddress = "0x0000000000000000000000000000000000008888"
+# accountRulesCacheMs = 30000   # cuanto vale lo cacheado de una cuenta antes de releer la cadena
 
 # Bloques opcionales. Si no estan, el servicio arranca con estos mismos valores y ambas
 # capacidades quedan apagadas: descomentar solo lo que se quiera cambiar.
@@ -35,6 +41,15 @@ accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
 # [dashboard]
 # enabled = false             # publicar los eventos en el bus en memoria
 # bufferSize = 500            # eventos retenidos para el que se conecta tarde; 0 deja el bus inerte
+
+# [validation]
+# Validacion del sufijo del modelo de gas. Las dos exigencias arrancan APAGADAS: encenderlas cambia
+# que metatx se aceptan. Con las dos en false el servicio acepta exactamente lo mismo que antes.
+# enforceNodeAddress = false        # rechazar la metatx cuyo sufijo apunta a otro writer node
+# enforceExpiration = false         # rechazar la vencida y la que llega sin la ventana minima
+# minExpirationSeconds = 300        # vigencia minima al llegar. Solo rige con enforceExpiration
+# expirationToleranceSeconds = 2    # tolerancia con la que se aplica ese minimo: quien firma
+#                                   # `ahora + 300` llega con 298 por la latencia y el redondeo
 
 # [log]
 # level = "info"              # debug, info, warn o error: nivel minimo que se escribe en la salida
