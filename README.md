@@ -41,6 +41,77 @@ Execute the executable file generated previously in a Validator node
 $ ./gas-relay-signer
 ```
 
+## Configuration
+
+The keys below were added by the `01`..`05` changes (event bus, HTTP endpoints, dashboard, nonce
+reordering and metatx validation). Every one of them is **optional**: when a key is absent the
+service applies the default listed here, and with all defaults in place it behaves exactly as it
+did before those changes. That is why `config.toml` ships them commented out — a commented key
+follows the binary's default and picks up a new one on upgrade, while an explicit key freezes the
+value on every node the template is copied to.
+
+Absence is meaningful: the blocks are read key by key, so an invalid value falls back to its
+default and is logged instead of aborting startup, and a key written with its default value is not
+the same as a missing key (see `dashboard.bufferSize`).
+
+### `[reorder]` — nonce tracking, reordering and receipt watching
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Turns on the authoritative nonce tracker, the hold-and-reorder buffer and the receipt watcher. With it off none of the three runs. **Observable change when on:** `eth_sendRawTransaction` for an out-of-order metatx does not answer until its turn comes or the window expires. |
+| `windowMs` | `3000` | How long a metatx may stay held **without the expected nonce advancing**. It measures stalling, not total wait: it is renewed every time the chain moves forward, so a long burst does not lose its tail to the clock. Also the grace period before forgetting a user with nothing in flight. |
+| `maxInflightPerUser` | `16` | Cap of metatx of the same user in flight or held. Bounds the damage when a nonce chain breaks. **The network imposes a lower ceiling:** Besu limits how many pending transactions it accepts from a single account (`tx-pool-limit-by-account-percentage`, ~5 with defaults) and that account is the writer node, sender of every wrapper transaction. Measured on pro-testnet: bursts of 5 go through, the sixth is rejected by Besu. Raising this above that ceiling does nothing until the validators raise theirs. |
+| `receiptTimeoutMs` | `60000` | How long the result of a sent metatx is awaited before declaring it undetermined and releasing its slot. |
+| `autoNonce` | `false` | Hands out nonces: queries from the same user are serialised and each one gets a different number. Off, querying reserves nothing and two clients asking at once get the same value. |
+| `autoNonceTicketMs` | `2000` | How long a handed-out nonce waits for the metatx that uses it. It is a **ticket, not a reservation**: if it expires unused the next caller gets that same number, so a client that asks and never sends does not block the queue. |
+
+### `[validation]` — gas model suffix
+
+Rejects, **before spending a writer node transaction**, what the RelayHub would reject on-chain.
+Both switches default to `false`, the opposite of the reference relayer: turning them on changes
+which metatx are accepted. A suffix that is absent, short or carries an unrepresentable expiration
+never rejects anything — what is validated is a present, readable suffix that says something
+unacceptable.
+
+| Key | Default | What it does |
+|---|---|---|
+| `enforceNodeAddress` | `false` | Rejects a metatx whose embedded node address is not this service (`WRONG_NODE_ADDRESS`). |
+| `enforceExpiration` | `false` | Rejects an expired metatx (`EXPIRED`) and one arriving without the minimum window (`EXPIRATION_TOO_LOW`). |
+| `minExpirationSeconds` | `300` | Minimum validity a metatx must still have on arrival. An expiration on the edge is useless: validating, waiting for the nonce turn and mining take seconds. Only applies with `enforceExpiration`. |
+| `expirationToleranceSeconds` | `2` | Tolerance the minimum is applied with — the real floor is minimum minus this. Whoever signs `now + 300` arrives with 298 (request latency plus second rounding on both sides), and demanding the exact value would reject precisely the client that did the right thing. `0` demands the exact value. |
+
+While `enforceExpiration` is off, `GET /info` reports both numbers as **zero**: publishing a value
+that is not applied would make a client sign to satisfy a rule that does not exist.
+
+### `[security]` — where the account rules contract comes from
+
+These two join the pre-existing `permissionsEnabled` and `accountContractAddress`.
+
+| Key | Default | What it does |
+|---|---|---|
+| `accountIngressAddress` | *(empty)* | Permissioning registry the rules contract is resolved from **when `accountContractAddress` is not set**. The configured address takes precedence, so an existing deployment does not change behaviour on upgrade. Empty means no registry is queried. `GET /info` reports which of the two sources was used. |
+| `accountRulesCacheMs` | `30000` | How long a per-account permission result stays valid. Without a cache every metatx pays a chain call; with it, granting an account takes up to this long to be seen. |
+
+### `[dashboard]` — live monitor
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Publishes events to the in-memory bus and registers `GET /dashboard` and `GET /dashboard/stream`. With it off those routes are **not registered** at all. The monitor does not authenticate and exposes the `from`, hashes and gas of every metatx, which is why it is off by default. |
+| `bufferSize` | `500` | Events retained for a late subscriber. An explicit `0` leaves the bus with no capacity — inert, same as `enabled = false`. This is the one key where zero has its own meaning rather than being an unwritten default. |
+
+### `[log]` — structured log
+
+| Key | Default | What it does |
+|---|---|---|
+| `level` | `"info"` | Minimum level written to standard output: `debug`, `info`, `warn` or `error`. |
+| `rawTx` | `false` | Dumps the full signed transaction in `relay.received`. Off by default: a deploy is several KB of initcode and long lines get truncated, losing the rest of the event. The raw tx is still identified by its hash and size. |
+
+### `[cors]` — cross-origin headers
+
+| Key | Default | What it does |
+|---|---|---|
+| `allowedOrigins` | *(empty)* | Origins allowed to call the service from a browser. Empty emits **no** header at all, which is how the service has always behaved. Closed by default matters: the service relays with the node's gas quota and asks for no authentication, so opening it is the operator's decision and not the binary's. `"*"` allows anyone. |
+
 ## Versión
 
 El binario reporta su versión:
