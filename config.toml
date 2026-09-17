@@ -1,61 +1,187 @@
+# Configuracion del RelaySigner.
+#
+# Esta es una PLANTILLA por despliegue: los valores de abajo son de ejemplo. Lo que no esta en el
+# archivo toma su valor por defecto, y todos los defaults dejan al servicio comportandose como
+# siempre lo hizo. Un valor invalido en cualquiera de los bloques opcionales no interrumpe el
+# arranque: esa clave cae a su default y queda registrada en el log.
+#
+# LA CLAVE DEL WRITER NODE NO VA ACA. Se lee de la variable de entorno `WRITER_KEY` (66 caracteres,
+# con el `0x` adelante) y sin ella el servicio no arranca. En un despliegue con systemd se inyecta
+# con un EnvironmentFile en un drop-in del servicio, con permisos restringidos: `/etc/profile.d`
+# NO sirve, porque solo aplica a shells de login y nunca llega al proceso que arranca systemd.
+
 [application]
+# JSON-RPC del nodo Besu. Es el nodo al que este servicio le manda las transacciones envolventes.
 nodeURL = "http://localhost:4545"
+
+# WebSocket del mismo nodo. De ahi llegan las cabeceras de bloque nuevo, que son las que resetean
+# el cupo de gas por bloque y, con el reordenamiento encendido, disparan la resolucion de los
+# resultados. Si el WS se cae, el servicio sigue atendiendo y reconecta con backoff acotado.
 wsURL = "ws://localhost:4546"
+
+# BaseRelayRecipientProxy de la red: el RelayHub se resuelve llamandole `getRelayHub()`. NO es la
+# direccion del hub. Si aca se pone el hub, la resolucion falla y el servicio no arranca.
+#   open-protestnet (testnet, chainId 648540): 0xa4B5eE2906090ce2cDbf5dfff944db26f397037D
+#   mainnet omega   (chainId 648541):          0xEAA5420AF59305c5ecacCB38fcDe70198001d147
 contractAddress = "0x39Ec8898eAD9d5995858EC4eEfA47ccC9DDe9cf0"
-nodeKeyPath = "/root/lacchain/data/key"  
-nodeAddressPath = "/root/lacchain/data/nodeAddress"
+
+# Puerto HTTP del servicio. Atiende el catch-all JSON-RPC en `POST /` y las rutas REST `GET /info`,
+# `GET /nonce/{address}` y `POST /relay`.
+#
+# En un writer de LACChain el trafico entra por el nginx del puerto 80, que rutea POR METODO: las
+# escrituras a este puerto y las lecturas a besu. Ese ruteo mira el metodo JSON-RPC del cuerpo, asi
+# que las rutas REST solo se alcanzan si el nginx las expone explicitamente; si no, solo por este
+# puerto desde la red interna.
 port = 9001
 
+# Informativas: el servicio NO las lee. Se dejan porque los despliegues las traen y porque documentan
+# donde viven la clave y la direccion del nodo en el servidor.
+nodeKeyPath = "/root/lacchain/data/key"
+nodeAddressPath = "/root/lacchain/data/nodeAddress"
+
+# Vida maxima de una entrada del tracker de nonces, en segundos. Default 300.
+# Es la red de seguridad: pasado el plazo se vuelve a leer el nonce real del hub. Con el
+# reordenamiento encendido, quien libera de verdad es el watcher de resultados.
+# nonceCacheTTL = 300
+
+# Vestigios del keystore clasico. El servicio solo imprime `agent` en una linea de log al arrancar;
+# no abre el archivo ni usa la passphrase, porque la clave viene de `WRITER_KEY`. No poner aca una
+# passphrase real: este archivo vive en el repositorio.
 [keystore]
-agent = "/home/adrian/.ethereum/keystore/UTC--2020-06-26T19-00-23.241896464Z--bceda2ba9af65c18c7992849c312d1db77cf008e"
+agent = "/ruta/al/keystore/UTC--...--<address>"
 
 [passphrase]
-agent = "Peru123."
+agent = "<sin-uso>"
 
 [security]
+# Exigir que el USUARIO de la metatx este dado de alta en el contrato de reglas. Apagado por
+# defecto: en el modelo de gas los usuarios no tienen por que estar permisionados -el permisionado
+# que la red aplica es el del writer node-, asi que encenderlo convierte AccountRules en el
+# allowlist de este servicio.
+#
+# Con esto encendido y sin contrato de reglas resoluble, la metatx se rechaza con
+# PERMISSIONING_UNAVAILABLE: si alguien pidio el chequeo y no hay nada contra que chequear, dejar
+# pasar seria abrir la puerta creyendo lo contrario.
 permissionsEnabled = false
-accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
-# Opcionales. `accountIngressAddress` es el registro de permisos de la red, del que se resuelve el
-# contrato de reglas CUANDO NO hay `accountContractAddress`: la direccion configurada tiene
-# precedencia, asi que un despliegue que ya la tiene no cambia de comportamiento. Vacio -el
-# default- no consulta ningun registro.
-# accountIngressAddress = "0x0000000000000000000000000000000000008888"
-# accountRulesCacheMs = 30000   # cuanto vale lo cacheado de una cuenta antes de releer la cadena
 
-# Bloques opcionales. Si no estan, el servicio arranca con estos mismos valores y ambas
-# capacidades quedan apagadas: descomentar solo lo que se quiera cambiar.
+# Contrato de reglas (AccountRules). Tiene PRECEDENCIA sobre el registro de abajo, asi que un
+# despliegue que ya la trae no cambia de comportamiento al actualizar el binario.
+#   open-protestnet: 0x23F99e888146FEE4A33aa330b7D1B2083de9F386
+accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
+
+# AccountIngress: el registro de permisos de la red, del que se resuelve el contrato de reglas
+# CUANDO NO hay `accountContractAddress`. Sin esta clave no se consulta ningun registro, que es
+# como se comporta el servicio desde siempre. La direccion de LACChain sirve en mainnet y testnet.
+# `GET /info` informa cual de las dos fuentes se uso: una direccion equivocada es indistinguible de
+# una correcta si no se sabe de donde salio.
+# accountIngressAddress = "0x0000000000000000000000000000000000008888"
+
+# Cuanto vale lo que se sabe del permiso de una cuenta, en milisegundos. Default 30000.
+# Sin cache es una consulta a la cadena por metatx; con cache, dar de alta una cuenta tarda hasta
+# este plazo en verse.
+# accountRulesCacheMs = 30000
+
+
+# ---------------------------------------------------------------------------------------------
+# Bloques opcionales. Ausentes, el servicio arranca con estos mismos valores y TODAS las
+# capacidades nuevas quedan apagadas: descomentar solo lo que se quiera cambiar.
+# ---------------------------------------------------------------------------------------------
 
 # [reorder]
-# enabled = false             # tracker de nonces, retencion de la metatx adelantada y watcher de
-#                             # resultados. Apagado, ninguno de los tres actua
+# Reordenamiento de nonces: el tracker autoritativo, la retencion de la metatx adelantada y el
+# watcher de resultados. Es lo que permite encadenar varias metatx de un usuario sin esperar a que
+# cada una se mine.
+#
+# Semantica observable que cambia al encenderlo: `eth_sendRawTransaction` de una metatx adelantada
+# NO responde hasta que le toca el turno o vence la ventana. Es inherente a reordenar sobre HTTP.
+#
+# enabled = false             # apagado, ninguna de las tres piezas actua
+#
 # windowMs = 3000             # cuanto puede estar retenida una metatx SIN que avance el nonce
-#                             # esperado de su usuario. Es tambien la gracia antes de olvidar a un
-#                             # usuario que se quedo sin metatx en vuelo
-# maxInflightPerUser = 16     # tope de metatx del mismo usuario en vuelo o retenidas
-# receiptTimeoutMs = 60000    # cuanto se espera el resultado antes de darlo por indeterminado
+#                             # esperado de su usuario. Mide ESTANCAMIENTO, no espera total: se
+#                             # renueva cada vez que el esperado avanza, asi que una rafaga larga
+#                             # no pierde la cola por reloj estando todo sano. Es tambien la gracia
+#                             # antes de olvidar a un usuario que se quedo sin metatx en vuelo
+#
+# maxInflightPerUser = 16     # tope de metatx del mismo usuario en vuelo o retenidas. Acota el
+#                             # dano cuando la cadena de nonces se rompe: al rechazarse la metatx k,
+#                             # las k+1 en adelante ya salieron y cada una gasto una transaccion
+#                             # del writer node.
+#                             #
+#                             # OJO: la red impone un techo mas bajo. Besu limita cuantas
+#                             # transacciones pendientes admite de UNA cuenta
+#                             # (tx-pool-limit-by-account-percentage, ~5 con los defaults), y la
+#                             # cuenta que importa es la del writer node, remitente de TODAS las
+#                             # envolventes. Medido en pro-testnet: rafagas de 5 entran enteras y
+#                             # la sexta la rechaza besu con "nonce too distant". Subir este numero
+#                             # por encima de ese techo no sirve mientras los validadores no suban
+#                             # el suyo.
+#
+# receiptTimeoutMs = 60000    # cuanto se espera el resultado de una metatx enviada antes de darla
+#                             # por indeterminada y liberar el lugar que ocupa
+#
 # autoNonce = false           # repartir nonces: las consultas del mismo usuario se serializan y
 #                             # cada una se lleva un numero distinto. Apagado, consultar no reserva
-# autoNonceTicketMs = 2000    # cuanto se espera la metatx que use un nonce entregado antes de que
-#                             # ese mismo numero vuelva a entregarse
-
-# [dashboard]
-# enabled = false             # publicar los eventos en el bus en memoria
-# bufferSize = 500            # eventos retenidos para el que se conecta tarde; 0 deja el bus inerte
+#                             # nada y dos clientes que preguntan a la vez se llevan el mismo
+#
+# autoNonceTicketMs = 2000    # cuanto se espera la metatx que use un nonce entregado. Es un TICKET
+#                             # y no una reserva: si vence sin usarse, el siguiente que pregunte se
+#                             # lleva ese mismo numero, asi que un cliente que pregunta y no envia
+#                             # no traba la cola
 
 # [validation]
-# Validacion del sufijo del modelo de gas. Las dos exigencias arrancan APAGADAS: encenderlas cambia
-# que metatx se aceptan. Con las dos en false el servicio acepta exactamente lo mismo que antes.
+# Validacion del sufijo del modelo de gas -los 64 bytes con `nodeAddress` y `expiration` que el
+# modelo agrega al final del data-. Rechaza ANTES de gastar una transaccion del writer node lo que
+# el hub iba a rechazar on-chain.
+#
+# Las dos exigencias arrancan APAGADAS, al reves que en el relayer de referencia: encenderlas cambia
+# QUE metatx se aceptan, que es lo mas sensible que se puede cambiar sin avisar. Con las dos en
+# false el servicio acepta exactamente lo mismo que antes.
+#
+# Un sufijo ausente, corto o con una expiracion no representable NO rechaza nada: lo que se valida
+# es un sufijo presente y legible que dice algo inaceptable.
+#
 # enforceNodeAddress = false        # rechazar la metatx cuyo sufijo apunta a otro writer node
-# enforceExpiration = false         # rechazar la vencida y la que llega sin la ventana minima
-# minExpirationSeconds = 300        # vigencia minima al llegar. Solo rige con enforceExpiration
-# expirationToleranceSeconds = 2    # tolerancia con la que se aplica ese minimo: quien firma
-#                                   # `ahora + 300` llega con 298 por la latencia y el redondeo
+#                                   # (WRONG_NODE_ADDRESS)
+#
+# enforceExpiration = false         # rechazar la vencida (EXPIRED) y la que llega sin la ventana
+#                                   # minima (EXPIRATION_TOO_LOW)
+#
+# minExpirationSeconds = 300        # vigencia minima que le tiene que quedar a la metatx al llegar.
+#                                   # Una expiracion al filo no sirve: entre validar, esperar el
+#                                   # turno del nonce y minar pasan segundos. Solo rige con
+#                                   # enforceExpiration
+#
+# expirationToleranceSeconds = 2    # tolerancia con la que se aplica ese minimo: el limite real es
+#                                   # minimo menos tolerancia. Quien firma `ahora + 300` llega con
+#                                   # 298 -se pierde la latencia de la peticion y el redondeo a
+#                                   # segundos de cada lado-, y exigir el valor exacto rechazaria
+#                                   # justo al cliente que hizo lo correcto. 0 exige el exacto
+#
+# Mientras enforceExpiration este apagado, `GET /info` informa el minimo y la tolerancia en CERO:
+# publicar un numero que no se aplica haria que un cliente firme para cumplir una regla inexistente.
+
+# [dashboard]
+# Monitor en vivo: `GET /dashboard` sirve la pagina desde el binario y `GET /dashboard/stream` el
+# flujo de eventos. Las dos rutas NO se registran con el flag apagado.
+#
+# No autentica, como el resto del servicio, y publica el `from`, los hashes y el gas de todas las
+# metatx: por eso el default es apagado y por eso no conviene exponerlo por el nginx del writer.
+#
+# enabled = false             # publicar los eventos en el bus en memoria
+# bufferSize = 500            # eventos retenidos para el que se conecta tarde. Un 0 explicito deja
+#                             # el bus sin capacidad, o sea inerte, igual que enabled = false
 
 # [log]
 # level = "info"              # debug, info, warn o error: nivel minimo que se escribe en la salida
-# rawTx = false               # volcar la transaccion firmada completa (por defecto solo hash y tamano)
+# rawTx = false               # volcar la transaccion firmada completa en relay.received. Apagado:
+#                             # un deploy son varios KB de initcode y las lineas largas se recortan,
+#                             # con lo que se pierde el resto del evento. La raw tx igual queda
+#                             # identificada por su hash y su tamano
 
 # [cors]
 # Origenes que pueden llamar al servicio desde un navegador. Vacio -el default- no emite ninguna
-# cabecera, que es como se comporta el servicio desde siempre. "*" autoriza a cualquiera.
+# cabecera, que es como se comporta el servicio desde siempre. Que el default sea cerrado importa:
+# el servicio relaya con el cupo de gas del nodo y no pide autenticacion, asi que abrirlo es una
+# decision del operador y no del binario. "*" autoriza a cualquiera.
 # allowedOrigins = ["https://mi-dapp.example"]
