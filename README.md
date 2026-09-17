@@ -27,11 +27,11 @@ solution
 $ git clone https://github.com/lacchain/gas-management
 
 $ cd gas-management
-$ make build      # compila con la versión inyectada desde el tag git (ver "Versión")
+$ make build      # builds with the version injected from the git tag (see "Version")
 ```
 
-> `go build` a secas también funciona, pero deja la versión en `dev`. Usa `make build`
-> (o los `-ldflags`) para que el binario reporte la versión real.
+> Plain `go build` works too, but leaves the version as `dev`. Use `make build` (or the
+> `-ldflags`) so the binary reports the real version.
 
 ## Run
 
@@ -112,168 +112,177 @@ These two join the pre-existing `permissionsEnabled` and `accountContractAddress
 |---|---|---|
 | `allowedOrigins` | *(empty)* | Origins allowed to call the service from a browser. Empty emits **no** header at all, which is how the service has always behaved. Closed by default matters: the service relays with the node's gas quota and asks for no authentication, so opening it is the operator's decision and not the binary's. `"*"` allows anyone. |
 
-## Versión
+## Version
 
-El binario reporta su versión:
+The binary reports its version:
 
 ```
 $ ./gas-relay-signer --version
 gas-relay-signer v1.1.0 (commit 5b7a3a7, built 2026-07-01T22:48:36Z, go1.23.0)
 ```
 
-La versión es el **tag git** (`git describe --tags`), inyectado en compilación vía
-`-ldflags "-X main.version=... -X main.commit=... -X main.date=..."` (lo hace `make build`).
-Compilado en el tag `v1.1.0` reporta `v1.1.0`; en `develop` sin tag, algo como
-`v1.0.1-9-g5b7a3a7`. Sin `ldflags` reporta `dev`.
+The version is the **git tag** (`git describe --tags`), injected at build time through
+`-ldflags "-X main.version=... -X main.commit=... -X main.date=..."` (that is what `make build`
+does). Built on tag `v1.1.0` it reports `v1.1.0`; on `develop` with no tag, something like
+`v1.0.1-9-g5b7a3a7`. Without `ldflags` it reports `dev`.
 
-### Publicar un release (manual)
+### Publishing a release (manual)
 
-1. Mergear `develop` → `master` (PR) y situarse en `master` actualizado.
-2. Crear el tag anotado y empujarlo:
+1. Merge `develop` → `master` (PR) and check out an up-to-date `master`.
+2. Create the annotated tag and push it:
    ```
    git tag -a v1.1.0 -m "gas-relay-signer v1.1.0"
    git push origin v1.1.0
    ```
-3. Compilar el artefacto con la versión inyectada y publicar el release:
+3. Build the artifact with the version injected and publish the release:
    ```
    make build VERSION=v1.1.0
    gh release create v1.1.0 gas-relay-signer --title "v1.1.0" --notes "..."
    ```
 
-## Rutas HTTP
+## HTTP routes
 
-Ademas del catch-all JSON-RPC de `POST /`, que no cambia, el servicio expone tres rutas REST.
+Besides the `POST /` JSON-RPC catch-all, which does not change, the service exposes three REST
+routes.
 
-**No son alcanzables por el puerto 80**: el nginx del writer node enruta por metodo leyendo el
-cuerpo, asi que quedan en el puerto del servicio (`:9001`), accesible por la red interna o por un
-tunel SSH. Abrirlas exige tocar la plantilla de `besu-networks`. Como el resto del servicio, no
-piden autenticacion: `GET /info` revela direcciones y el balance del nodo, y `POST /relay` consume
-su cupo de gas igual que el camino JSON-RPC.
+The writer node's nginx routes **by method**, reading the request body, so a `GET` never matches
+and would end up at Besu. The testnet template in `besu-networks` therefore declares these three
+routes explicitly and they are reachable on port 80; the dashboard is deliberately left out, since
+it does not authenticate and exposes the `from`, hashes and gas of every metatx. On a node whose
+nginx has not been updated they are still reachable on the service port (`:9001`) from the internal
+network or through an SSH tunnel.
+
+Like the rest of the service, these routes require no authentication: `GET /info` reveals addresses
+and the node balance, and `POST /relay` consumes its gas quota just like the JSON-RPC path.
 
 ```bash
 curl -s http://localhost:9001/info
 curl -s http://localhost:9001/nonce/0xAbC...
 curl -s "http://localhost:9001/nonce/0xAbC...?peek=true"
 curl -s -X POST http://localhost:9001/relay \
-  -H 'content-type: application/json' -d '{"rawTx":"0xf8aa..."}'   # tambien acepta "signedTransaction"
+  -H 'content-type: application/json' -d '{"rawTx":"0xf8aa..."}'   # "signedTransaction" also accepted
 ```
 
 ### `GET /info`
 
-Devuelve que direcciones esta usando este nodo, de donde salio cada una y con que parametros esta
-operando. De aca sale el `relayHubProxyAddress` que va como `trustedForwarder` de los contratos.
+Returns which addresses this node is using, where each one came from, and the parameters it is
+operating with. This is where the `relayHubProxyAddress` used as the contracts' `trustedForwarder`
+comes from.
 
-Un dato que no se puede obtener se informa **sin valor** en lugar de omitirse, y la ruta responde
-igual: es a la que se acude cuando algo anda mal, asi que no puede ser la primera en caerse.
+A value that cannot be obtained is reported **without a value** rather than omitted, and the route
+answers anyway: it is the one you turn to when something is wrong, so it cannot be the first to
+fall over.
 
 ### `GET /nonce/{address}`
 
-`{address, nonce, nonceHex, nextNonce, nextNonceHex, pending}`. `nonce` es lo que dice el RelayHub;
-`nextNonce` es con lo que hay que firmar ahora, contando las metatx ya relayadas y todavia sin
-minarse. Encadenar sin `nextNonce` produce nonces repetidos.
+`{address, nonce, nonceHex, nextNonce, nextNonceHex, pending}`. `nonce` is what the RelayHub says;
+`nextNonce` is what must be signed now, counting the metatx already relayed and not yet mined.
+Chaining without `nextNonce` produces repeated nonces.
 
-`?peek=true` pide consultar sin tomar posicion en la cola. Con `reorder.autoNonce` apagado -el
-default- no cambia la respuesta, porque no hay reparto que evitar. Con el reparto encendido, las
-consultas del mismo usuario se serializan y cada una se lleva un numero distinto; `peek` mira sin
-entrar en esa cola.
+`?peek=true` asks to look without taking a place in the queue. With `reorder.autoNonce` off — the
+default — it does not change the answer, because there is no hand-out to avoid. With hand-out on,
+queries from the same user are serialised and each one gets a different number; `peek` looks
+without entering that queue.
 
-Lo que se entrega es un TURNO y no una reserva: consultar no adelanta por si solo el proximo nonce.
-Un numero entregado y nunca usado no traba a nadie -al vencer `autoNonceTicketMs` el siguiente que
-pregunte se lleva ese mismo numero-, y lo que hace que dos clientes se lleven numeros distintos es
-que la metatx del primero llegue.
+What is handed out is a TURN and not a reservation: querying does not advance the next nonce by
+itself. A number handed out and never used blocks nobody — when `autoNonceTicketMs` expires the
+next caller gets that same number — and what makes two clients get different numbers is the first
+one's metatx arriving.
 
 ### `POST /relay`
 
-Relaya la metatx y responde recien cuando se sabe como termino. Recorre exactamente las mismas
-validaciones que `POST /`.
+Relays the metatx and answers only once its outcome is known. It goes through exactly the same
+validations as `POST /`.
 
-Un revert del contrato destino se responde con codigo de exito y `executed: false`: la metatx **si**
-se relayo, lo que fallo fue el destino. Un rechazo responde `400` con `{error, code, details}`.
+A revert in the target contract is answered with a success status and `executed: false`: the metatx
+**was** relayed, what failed was the destination. A rejection answers `400` with
+`{error, code, details}`.
 
-El vencimiento de la espera responde `RECEIPT_TIMEOUT` con el hash: la metatx **se envio** y puede
-minarse despues. Tratarlo como un rechazo y reenviarla produce un nonce repetido.
+A timed-out wait answers `RECEIPT_TIMEOUT` with the hash: the metatx **was sent** and may still be
+mined. Treating that as a rejection and resending it produces a repeated nonce.
 
-### Diferencias con el relayer de Node
+### Differences with the Node relayer
 
-Las rutas son compatibles campo a campo salvo por lo siguiente, que viene de capacidades que este
-servicio todavia no tiene:
+The routes are field-for-field compatible except for the following, which comes from capabilities
+this service does not have yet:
 
-| Campo | Node | Aca | Por que |
+| Field | Node | Here | Why |
 |---|---|---|---|
-| `relayHubSource` (`/info`) | `config` o `proxy` | siempre `proxy` | la direccion siempre se resuelve del proxy |
-| `reorderEnabled`, `receiptTimeoutMs` (`/info`) | no existen | presentes | parametros propios de este servicio |
-| `simulated` (`/relay`) | segun hubo pre-chequeo | siempre `false` | no hay pre-chequeo por simulacion con `eth_call` |
-| `errorCode` (`/relay`) | de la simulacion o del hub | solo del hub | idem |
-| `output` (`/relay`) | return data, o el motivo del revert | el motivo del revert, o sin valor | el return data de una llamada exitosa todavia no se expone |
+| `relayHubSource` (`/info`) | `config` or `proxy` | always `proxy` | the address is always resolved from the proxy |
+| `reorderEnabled`, `receiptTimeoutMs` (`/info`) | do not exist | present | parameters specific to this service |
+| `simulated` (`/relay`) | whether there was a pre-check | always `false` | there is no `eth_call` simulation pre-check |
+| `errorCode` (`/relay`) | from the simulation or the hub | from the hub only | same reason |
+| `output` (`/relay`) | return data, or the revert reason | the revert reason, or no value | the return data of a successful call is not exposed yet |
 
-De los trece codigos de error del catalogo de Node, este servicio produce doce: `BAD_RAW_TX`,
+Of the thirteen error codes in the Node catalogue, this service produces twelve: `BAD_RAW_TX`,
 `BAD_META_TX`, `BAD_NONCE`, `WRONG_NODE_ADDRESS`, `EXPIRED`, `EXPIRATION_TOO_LOW`,
 `TOO_MANY_INFLIGHT`, `SENDER_NOT_PERMITTED`, `PERMISSIONING_UNAVAILABLE`, `SEND_FAILED`,
-`RECEIPT_TIMEOUT` y `RELAY_ERROR`. El que falta es `SIMULATION_FAILED`, que corresponde al
-pre-chequeo por simulacion, todavia inexistente. Lo que no tiene codigo propio usa `RELAY_ERROR`:
-no se inventan codigos fuera del catalogo.
+`RECEIPT_TIMEOUT` and `RELAY_ERROR`. The missing one is `SIMULATION_FAILED`, which belongs to the
+simulation pre-check that does not exist yet. Anything without its own code uses `RELAY_ERROR`:
+codes outside the catalogue are never invented.
 
-### Validacion del sufijo del modelo de gas
+### Gas model suffix validation
 
-El modelo de gas agrega al final del `data` de la metatx la direccion del nodo que tiene que
-relayarla y su expiracion. Con `validation.enforceNodeAddress` el servicio rechaza la metatx
-dirigida a **otro** writer node, y con `validation.enforceExpiration` la vencida y la que llega sin
-la ventana minima. Los dos rechazos ocurren **antes** de gastar una transaccion del writer node: sin
-ellos, la descubre el hub on-chain con la transaccion ya consumida.
+The gas model appends to the metatx `data` the address of the node that must relay it and its
+expiration. With `validation.enforceNodeAddress` the service rejects a metatx aimed at **another**
+writer node, and with `validation.enforceExpiration` an expired one and one arriving without the
+minimum window. Both rejections happen **before** spending a writer node transaction: without them
+the hub finds out on-chain with the transaction already consumed.
 
-El minimo se exige con tolerancia (`expirationToleranceSeconds`, 2 s por defecto). Quien firma
-`ahora + 300` llega con 298 -se pierde la latencia de la peticion y el redondeo a segundos de cada
-lado-, asi que exigir el valor exacto rechazaria justo al cliente que hizo lo correcto.
+The minimum is enforced with tolerance (`expirationToleranceSeconds`, 2 s by default). Whoever
+signs `now + 300` arrives with 298 — request latency plus second rounding on both sides — so
+demanding the exact value would reject precisely the client that did the right thing.
 
-Las dos exigencias arrancan **apagadas**, al reves que en el relayer de Node: encenderlas cambia que
-metatx se aceptan. Con las dos en `false`, el servicio acepta exactamente lo mismo que antes. Por lo
-mismo, `GET /info` informa `minExpirationSeconds` y `expirationToleranceSeconds` en cero mientras la
-exigencia este apagada: publicar un numero que no se aplica haria que un cliente firme para cumplir
-una regla que no existe.
+Both switches start **off**, the opposite of the Node relayer: turning them on changes which metatx
+are accepted. With both `false` the service accepts exactly what it accepted before. For the same
+reason `GET /info` reports `minExpirationSeconds` and `expirationToleranceSeconds` as zero while
+the check is off: publishing a number that is not applied would make a client sign to satisfy a
+rule that does not exist.
 
-Un sufijo ausente, corto o con una expiracion que no entra en un entero **no** rechaza nada: lo que
-se valida es un sufijo presente y legible que dice algo inaceptable.
+A suffix that is absent, short, or carries an expiration that does not fit in an integer rejects
+**nothing**: what is validated is a present, readable suffix that says something unacceptable.
 
-### De donde sale el contrato de reglas
+### Where the account rules contract comes from
 
-Si `security.accountContractAddress` esta configurada, se usa esa -es lo que hace un despliegue
-actual, y por eso actualizar el binario no le cambia el comportamiento-. Si no lo esta, se resuelve
-del registro de permisos de la red (`security.accountIngressAddress`). `GET /info` informa cual de
-las dos fuentes se uso: una direccion equivocada es indistinguible de una correcta si no se sabe de
-donde salio.
+If `security.accountContractAddress` is set, that one is used — which is what an existing
+deployment does, and why upgrading the binary does not change its behaviour. If it is not set, the
+contract is resolved from the network's permissioning registry (`security.accountIngressAddress`).
+`GET /info` reports which of the two sources was used: a wrong address is indistinguishable from a
+correct one if you cannot tell where it came from.
 
-Una red que no expone contrato de reglas -sin registro, o sin contrato publicado- simplemente no
-tiene permisionado de cuentas, y el servicio arranca y relaya igual. Pero si `permissionsEnabled`
-esta en `true` y **no** se pudo resolver ninguno, la metatx se rechaza con
-`PERMISSIONING_UNAVAILABLE`: si alguien pidio el chequeo y no hay nada contra que chequear, dejar
-pasar seria abrir la puerta creyendo lo contrario.
+A network that exposes no rules contract — no registry, or no contract published — simply has no
+account permissioning, and the service starts and relays all the same. But if `permissionsEnabled`
+is `true` and **none** could be resolved, the metatx is rejected with `PERMISSIONING_UNAVAILABLE`:
+if somebody asked for the check and there is nothing to check against, letting it through would be
+opening the door while believing otherwise.
 
-El resultado del chequeo se cachea por cuenta (`security.accountRulesCacheMs`, 30 s por defecto).
-El intercambio es explicito: sin cache, cada metatx paga una consulta a la cadena; con cache, dar de
-alta una cuenta tarda hasta ese plazo en verse.
+The check result is cached per account (`security.accountRulesCacheMs`, 30 s by default). The
+trade-off is explicit: without a cache every metatx pays a chain call; with it, granting an account
+takes up to that long to be seen.
 
-Al arrancar se comprueba ademas si **este** nodo esta permitido y se informa en `GET /info`. No
-impide arrancar: un nodo no permitido relaya sin error aparente y todas sus metatx fallan on-chain,
-y eso se diagnostica mejor viendolo en `/info` que con un binario que no levanta.
+At startup the service also checks whether **this** node is permitted and reports it in `GET /info`.
+It does not prevent startup: a node that is not permitted relays with no apparent error and all of
+its metatx fail on-chain, and that is diagnosed better by seeing it in `/info` than with a binary
+that refuses to come up.
 
-### Reordenamiento de nonces
+### Nonce reordering
 
-Con `reorder.enabled = true` el servicio deja de mandar y esperar a ver que dice el hub:
+With `reorder.enabled = true` the service stops sending and waiting to see what the hub says:
 
-- **Valida el nonce antes de enviar.** Uno ya consumido se rechaza con `BAD_NONCE` sin gastar una
-  transaccion del writer node.
-- **Retiene la metatx adelantada** hasta que se cierre el hueco, en vez de gastarla para descubrir
-  que llego fuera de orden. La ventana mide **estancamiento**: se renueva cada vez que el nonce
-  esperado avanza, asi que una rafaga larga no pierde la cola por reloj. Al vencer se responde el
-  mismo `BAD_NONCE`, sin haber enviado nada.
-- **Acota la rafaga por usuario** con `maxInflightPerUser`: al superarlo, `TOO_MANY_INFLIGHT`.
-- **Detecta como termino cada metatx** sin que el cliente pregunte, y libera su lugar.
+- **It validates the nonce before sending.** An already consumed one is rejected with `BAD_NONCE`
+  without spending a writer node transaction.
+- **It holds an out-of-order metatx** until the gap closes, instead of spending it to discover it
+  arrived out of order. The window measures **stalling**: it is renewed every time the expected
+  nonce advances, so a long burst does not lose its tail to the clock. On expiry it answers the
+  same `BAD_NONCE`, having sent nothing.
+- **It caps the burst per user** with `maxInflightPerUser`: beyond it, `TOO_MANY_INFLIGHT`.
+- **It detects how each metatx ended** without the client asking, and releases its slot.
 
-Semantica observable que cambia con el flag encendido: `eth_sendRawTransaction` de una metatx
-adelantada **no responde** hasta que le toca el turno o vence la ventana. Es inherente a reordenar
-sobre HTTP y es lo que hace el relayer de Node.
+Observable semantics that change with the flag on: `eth_sendRawTransaction` for an out-of-order
+metatx **does not answer** until its turn comes or the window expires. This is inherent to
+reordering over HTTP and is what the Node relayer does.
 
-Con el flag apagado -el default- nada de esto corre y el comportamiento es el de siempre.
+With the flag off — the default — none of this runs and the behaviour is the usual one.
 
 ## Know More
 
@@ -284,8 +293,8 @@ Con el flag apagado -el default- nada de esto corre y el comportamiento es el de
 * [Stress testing and performance of the network with the GAS distribution mechanism](https://github.com/LACNetNetworks/gas-management/blob/master/docs/STRESS_TESTING.md)
 * [Comparison with Ethereum](https://github.com/LACNetNetworks/gas-management/blob/master/docs/COMPARISON_WITH_ETHEREUM.md)
 * [FAQ](https://github.com/LACNet-Networks/gas-management/blob/master/docs/FAQ.md)
-* [Reporte del fallo de la llamada interna (status=1 → fallida)](docs/RECEIPT-FALLO-INTERNO.md) — cómo el RelaySigner reescribe el receipt a `status=0`+`revertReason` y expone `relay_getMetaTxResult` (rama `develop`).
-* [Manejo del nonce (caché por sender y anti-bloqueo)](docs/NONCE-CACHE.md) — caché en memoria del próximo nonce por sender, y los 4 mecanismos que evitan que una address quede atascada tras una colisión `BadNonce` (rama `develop`).
+* [Reporting a failed inner call (status=1 → failed)](docs/RECEIPT-FALLO-INTERNO.md) — how the RelaySigner rewrites the receipt to `status=0` plus `revertReason` and exposes `relay_getMetaTxResult` (branch `develop`, document in Spanish).
+* [Nonce handling (per-sender cache and anti-blocking)](docs/NONCE-CACHE.md) — in-memory cache of the next nonce per sender, and the 4 mechanisms that keep an address from getting stuck after a `BadNonce` collision (branch `develop`, document in Spanish).
 
 ## Copyright 2022 LACNet
 
