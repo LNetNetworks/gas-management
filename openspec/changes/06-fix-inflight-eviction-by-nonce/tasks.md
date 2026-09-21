@@ -83,7 +83,7 @@
 - [x] 6.1 Con `maxInflightPerUser = 5` en el nodo `34.69.184.205`, correr
   `node_relayer/examples/nonce-stress.ts --n 8` seis veces y verificar que da **5 minadas en las seis
   corridas**. Linea base medida el 2026-09-18 con el codigo actual: 4, 3, 3, 1, 2, 3
-- [ ] 6.2 Repetir con `maxInflightPerUser = 16` y verificar que sigue dando 5 de 8, sin regresion
+- [x] 6.2 Repetir con `maxInflightPerUser = 16` y verificar que sigue dando 5 de 8, sin regresion
   respecto de la linea base actual (5 en las seis corridas)
 - [x] 6.3 Con el monitor abierto, reproducir una rafaga que se pase del cupo y verificar en el panel
   de eventos que la desalojada aparece con `relay.turn` `reason=too_many_inflight` y que ninguna
