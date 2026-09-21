@@ -156,6 +156,11 @@ func (service *RelaySignerService) awaitTurn(ctx context.Context, prepared *Prep
 		// no con el BAD_NONCE del vencimiento, que no explicaria nada.
 		evicted := entry.evicted
 		inflight := service.inflightLocked(key)
+		if evicted {
+			// El conteo de ahora no sirve: esta metatx ya salio del registro al marcarse. Se
+			// informa el que justifico el desalojo.
+			inflight = entry.evictedInflight
+		}
 		service.sendersLock.Unlock()
 
 		if evicted {

@@ -188,7 +188,7 @@ func (service *RelaySignerService) makeRoomFor(key string, nonce uint64) (int, b
 	if highest == nil || nonce >= highest.nonce {
 		return inflight, false
 	}
-	service.evictHeldLocked(key, highest)
+	service.evictHeldLocked(key, highest, inflight)
 	return inflight, true
 }
 

@@ -622,7 +622,8 @@ func TestEvictedMetaTxIsRejectedByCapNotByNonce(t *testing.T) {
 	waitUntil(t, "la adelantada queda retenida", func() bool { return service.inflightOf(quien.Hex()) > 0 })
 
 	service.sendersLock.Lock()
-	service.evictHeldLocked(senderKey(quien.Hex()), service.highestHeldLocked(senderKey(quien.Hex())))
+	key := senderKey(quien.Hex())
+	service.evictHeldLocked(key, service.highestHeldLocked(key), service.inflightLocked(key))
 	service.sendersLock.Unlock()
 
 	select {
@@ -1249,5 +1250,60 @@ func TestCapAndEvictionDoNotRunWithReorderingOff(t *testing.T) {
 	defer service.sendersLock.Unlock()
 	if len(service.held) != 0 {
 		t.Errorf("el registro de retenidas no se puede tocar con el reordenamiento apagado: %v", service.held)
+	}
+}
+
+// Una metatx desalojada informa el cupo que JUSTIFICO su desalojo, no el que haya al despertar.
+//
+// Al marcarla ya salio del registro -el lugar se descuenta al marcar, D3- y las demas pueden haber
+// drenado, asi que el conteo del momento en que despierta puede quedar POR DEBAJO del maximo. Un
+// "4 metatx in flight, maximum 5" es incomprensible para quien lo recibe: le dicen que se paso del
+// limite con un numero menor que el limite. Visto en el nodo de pruebas el 2026-09-21.
+//
+// El desalojo se hace a mano con un conteo distinguible del vivo: es la unica forma de demostrar
+// que lo que viaja al cliente es el conteo guardado y no el que se lee al despertar.
+func TestEvictedReportsTheInflightThatJustifiedIt(t *testing.T) {
+	events.Init(true, 200)
+	defer events.Init(false, 0)
+	node := newFakeNode(345)
+	defer node.close()
+	const cupo = 3
+	service := reorderingService(node, 3000, cupo)
+
+	quien := user("0b")
+	key := senderKey(quien.Hex())
+	retenidas := holdBurst(t, service, quien, 346, 347, 348)
+
+	const cuandoSeDecidio = 7 // distinto de cualquier conteo vivo posible en este test
+
+	service.sendersLock.Lock()
+	vivo := service.inflightLocked(key)
+	service.evictHeldLocked(key, service.highestHeldLocked(key), cuandoSeDecidio)
+	service.sendersLock.Unlock()
+
+	if vivo == cuandoSeDecidio {
+		t.Fatalf("el test no prueba nada si el conteo vivo (%d) coincide con el guardado", vivo)
+	}
+
+	select {
+	case err := <-retenidas[348]:
+		if code := CodeOf(err); code != CodeTooManyInflight {
+			t.Fatalf("la desalojada deberia rechazarse por tope, fue %s", code)
+		}
+		detalles := DetailsOf(err)
+		if detalles["inflight"] != cuandoSeDecidio {
+			t.Errorf("la desalojada tiene que informar el cupo del momento del desalojo (%d), "+
+				"informo %v", cuandoSeDecidio, detalles["inflight"])
+		}
+		if detalles["max"] != cupo {
+			t.Errorf("el maximo informado deberia ser %d, fue %v", cupo, detalles["max"])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("la desalojada no termino")
+	}
+
+	// Y por el camino real, el numero informado nunca puede ser menor que el tope.
+	if _, err := service.ReserveGasAndSend(context.Background(), metaTxOf(quien, 345)); err != nil {
+		t.Fatalf("la que destraba la cola tiene que admitirse: %v", err)
 	}
 }
