@@ -45,13 +45,18 @@ cadena de nonces se rompe". Al elegir mal a quien descartar, es el quien la romp
 - El desalojo reutiliza el motivo `too_many_inflight` que ya existe (`service/reorder_turn.go:34`),
   asi que la metatx desalojada termina con el mismo rechazo `TOO_MANY_INFLIGHT` que hoy recibe la
   que llega tarde. **No se introduce ningun codigo de error nuevo.**
-- El resultado pasa a ser determinista: de una rafaga de N con cupo C sobreviven siempre las C de
-  nonce mas bajo, sin importar el orden de llegada.
-- El cupo **converge** al maximo, no se vuelve estricto instante a instante. La puerta no serializa
-  a las peticiones de un mismo usuario -hoy tampoco lo hace-, asi que una rafaga simultanea puede
-  pasar de largo por un momento; la comprobacion de la espera devuelve el cupo a su tope rechazando
-  a las de nonce mas alto. El conjunto que sobrevive es el mismo, y ninguna de las que sobran gasta
-  una transaccion del writer node. Ver design.md, D3 y D6.
+- Lo que pasa a ser determinista es **a quien se descarta**: siempre la de nonce mas alto entre las
+  candidatas, nunca una del medio de la cadena. De ahi se sigue lo que importa, que la cadena que
+  sale sea **contigua**: sin huecos, sin metatx huerfanas esperando un nonce que ya no va a llegar.
+- El **numero** de sobrevivientes de una rafaga que se paso del cupo NO queda fijado, y no es un
+  descuido: el cupo acota la admision, no la salida. A una metatx ya admitida y en turno no se le
+  vuelve a comprobar el cupo -bloquearla seria romper la cadena que este cambio protege-, asi que
+  al destrabarse la cola cada retenida corre una carrera entre recibir su turno y ser el excedente.
+  Con cupo 3 y una rafaga de 5 pueden salir 3 o 4. Ver design.md, D7.
+- El cupo tampoco se vuelve estricto instante a instante: la puerta no serializa a las peticiones de
+  un mismo usuario -hoy tampoco lo hace-, asi que una rafaga simultanea lo pasa por un momento y la
+  comprobacion de la espera descarta de a una a las de nonce mas alto. Ninguna de las que sobran
+  gasta una transaccion del writer node. Ver design.md, D3 y D6.
 
 No es **BREAKING**: el conjunto de codigos de error no cambia, el contrato de `POST /` no cambia, y
 con el reordenamiento apagado no se entra a este camino. Lo que cambia es **cual** de las metatx de

@@ -60,7 +60,7 @@ the same as a missing key (see `dashboard.bufferSize`).
 |---|---|---|
 | `enabled` | `false` | Turns on the authoritative nonce tracker, the hold-and-reorder buffer and the receipt watcher. With it off none of the three runs. **Observable change when on:** `eth_sendRawTransaction` for an out-of-order metatx does not answer until its turn comes or the window expires. |
 | `windowMs` | `3000` | How long a metatx may stay held **without the expected nonce advancing**. It measures stalling, not total wait: it is renewed every time the chain moves forward, so a long burst does not lose its tail to the clock. Also the grace period before forgetting a user with nothing in flight. |
-| `maxInflightPerUser` | `16` | Cap of metatx of the same user in flight or held. Bounds the damage when a nonce chain breaks. **The network imposes a lower ceiling:** Besu limits how many pending transactions it accepts from a single account (`tx-pool-limit-by-account-percentage`, ~5 with defaults) and that account is the writer node, sender of every wrapper transaction. Measured on pro-testnet: bursts of 5 go through, the sixth is rejected by Besu. Raising this above that ceiling does nothing until the validators raise theirs. |
+| `maxInflightPerUser` | `16` | Cap of metatx of the same user in flight or held. Bounds the damage when a nonce chain breaks. **What gets discarded above the cap is the highest nonce**, not the last to arrive: a metatx arriving with a nonce lower than some held one evicts the highest held and takes its place, because the low one is what can unblock the queue. Discarding from the middle of a chain would orphan everything after it. The cap bounds **admission, not departure** — a metatx already admitted and in turn is sent without re-checking it — so the *number* of survivors of an over-cap burst is not fixed; who gets discarded is. **The network imposes a lower ceiling:** Besu limits how many pending transactions it accepts from a single account (`tx-pool-limit-by-account-percentage`, ~5 with defaults) and that account is the writer node, sender of every wrapper transaction. Measured on pro-testnet: bursts of 5 go through, the sixth is rejected by Besu. Raising this above that ceiling does nothing until the validators raise theirs. |
 | `receiptTimeoutMs` | `60000` | How long the result of a sent metatx is awaited before declaring it undetermined and releasing its slot. |
 | `autoNonce` | `false` | Hands out nonces: queries from the same user are serialised and each one gets a different number. Off, querying reserves nothing and two clients asking at once get the same value. |
 | `autoNonceTicketMs` | `2000` | How long a handed-out nonce waits for the metatx that uses it. It is a **ticket, not a reservation**: if it expires unused the next caller gets that same number, so a client that asks and never sends does not block the queue. |
@@ -275,7 +275,8 @@ With `reorder.enabled = true` the service stops sending and waiting to see what 
   arrived out of order. The window measures **stalling**: it is renewed every time the expected
   nonce advances, so a long burst does not lose its tail to the clock. On expiry it answers the
   same `BAD_NONCE`, having sent nothing.
-- **It caps the burst per user** with `maxInflightPerUser`: beyond it, `TOO_MANY_INFLIGHT`.
+- **It caps the burst per user** with `maxInflightPerUser`: beyond it, `TOO_MANY_INFLIGHT` — always
+  to the highest nonce among the candidates, so the chain that goes out has no gaps.
 - **It detects how each metatx ended** without the client asking, and releases its slot.
 
 Observable semantics that change with the flag on: `eth_sendRawTransaction` for an out-of-order

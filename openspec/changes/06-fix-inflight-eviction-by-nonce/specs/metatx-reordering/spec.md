@@ -9,10 +9,11 @@ y cual es el maximo. El tope SHALL comprobarse tambien mientras una metatx esper
 donde el cupo se hace cumplir, porque el cupo se puede llenar durante la espera y porque la
 comprobacion de entrada no serializa a las peticiones de un mismo usuario.
 
-El tope es una cota a la que el sistema **converge**, no una exactitud instante a instante: una
-rafaga simultanea puede pasarlo por un momento, y la comprobacion durante la espera lo devuelve al
-tope rechazando a las de nonce mas alto. Ninguna de las que sobran gasta una transaccion del writer
-node.
+El tope acota la ADMISION, no la salida: a una metatx ya admitida y a la que le llega su turno no
+se le vuelve a comprobar, porque bloquearla seria descartar del medio de la cadena. Por eso el tope
+no es una exactitud instante a instante -una rafaga simultanea lo pasa por un momento- ni fija
+cuantas metatx sobreviven a una rafaga que se paso. Lo que SHALL ser determinista es **a quien se
+descarta**, y ninguna de las descartadas gasta una transaccion del writer node.
 
 Rechazar por nonce y no por orden de llegada es lo que preserva la cadena. Las metatx de un usuario
 no son intercambiables: llevan nonces consecutivos que el hub exige exactos, asi que descartar una
@@ -35,15 +36,16 @@ Existe para acotar el dano cuando la cadena de nonces se rompe: al rechazarse la
 - **THEN** se desaloja la retenida de nonce mas alto, con el mismo motivo de tope superado que
   recibiria la que llega
 - **AND** la que llega pasa a esperar su turno normalmente
-- **AND** el cupo del usuario converge al maximo configurado: si una rafaga simultanea lo pasa por
-  un momento, las que sobran se rechazan por tope superado -las de nonce mas alto primero- y no por
-  nonce equivocado
+- **AND** si una rafaga simultanea pasa el tope por un momento, las retenidas que sobran se rechazan
+  por tope superado -las de nonce mas alto primero- y no por nonce equivocado
 
 #### Scenario: Una rafaga que se pasa del cupo conserva su cadena
 
 - **WHEN** un usuario envia mas metatx de las que permite el cupo, en cualquier orden de llegada
-- **THEN** las que sobreviven son las de nonce mas bajo, tantas como el cupo admita
-- **AND** el resultado es el mismo sin importar en que orden llegaron
+- **THEN** las que se descartan son siempre las de nonce mas alto, nunca una del medio de la cadena
+- **AND** las que se envian forman una cadena de nonces contigua, sin huecos, asi que ninguna queda
+  huerfana esperando un nonce que ya no va a llegar
+- **AND** ninguna se descarta por nonce equivocado
 
 #### Scenario: El cupo se llena durante la espera
 

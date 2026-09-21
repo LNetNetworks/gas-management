@@ -177,77 +177,139 @@ func (service *RelaySignerService) pendingOf(from string) int {
 // cambia: dos locks distintos para dos vistas del mismo hecho dejarian una ventana en la que el
 // nonce ya avanzo y el que espera todavia no se entero.
 
-// waitTurnLocked registra a quien espera turno y devuelve el canal por el que se lo despierta. Se
-// llama con el lock tomado; el canal se cierra -nunca se escribe- asi que despertar a muchos es una
-// sola operacion y no puede bloquear a quien despierta.
-func (service *RelaySignerService) waitTurnLocked(key string) chan struct{} {
-	if service.turnWaiters == nil {
-		service.turnWaiters = make(map[string]map[chan struct{}]struct{})
-	}
-	waiters := service.turnWaiters[key]
-	if waiters == nil {
-		waiters = make(map[chan struct{}]struct{})
-		service.turnWaiters[key] = waiters
-	}
-	wake := make(chan struct{})
-	waiters[wake] = struct{}{}
-	return wake
+// heldMetaTx es UNA metatx retenida: su nonce, por donde despertarla, y si el cupo ya la desalojo.
+//
+// El nonce esta aca porque es lo unico que permite elegir a quien descartar cuando el cupo se
+// llena: descartar la del medio de una cadena invalida todas las posteriores, descartar la mas
+// alta no invalida ninguna. Ver design.md, D1.
+//
+// `wake` es el canal de la vuelta EN CURSO de la espera, o nil entre dos vueltas: una retenida no
+// esta dormida todo el tiempo que esta retenida. El canal se cierra -nunca se escribe- asi que
+// despertar a muchos es una sola operacion y no puede bloquear a quien despierta.
+type heldMetaTx struct {
+	nonce   uint64
+	wake    chan struct{}
+	evicted bool
 }
 
-// stopWaitingLocked saca a quien dejo de esperar. Sin esto el mapa se queda con un conjunto vacio
-// por cada usuario que alguna vez espero turno.
-func (service *RelaySignerService) stopWaitingLocked(key string, wake chan struct{}) {
-	waiters := service.turnWaiters[key]
-	if waiters == nil {
-		return
+// waitingOf es cuantas metatx de ese usuario estan retenidas esperando su turno. Se llama con el
+// lock TOMADO.
+//
+// Cuenta lo REGISTRADO y no lo dormido: entre dos vueltas de la espera, una metatx retenida no
+// esta dormida pero SIGUE retenida, y no contarla ahi dejaria pasar por encima del tope justo en
+// la rafaga que el tope existe para acotar.
+func (service *RelaySignerService) waitingOf(key string) int {
+	return len(service.held[key])
+}
+
+// hold anota que una metatx de ese usuario quedo retenida y devuelve su entrada, que es como se la
+// despierta y como se la desaloja despues.
+//
+// Se registra en orden de llegada: entre dos retenidas del mismo nonce, la ultima es la que sobra.
+func (service *RelaySignerService) hold(key string, nonce uint64) *heldMetaTx {
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+	if service.held == nil {
+		service.held = make(map[string][]*heldMetaTx)
 	}
-	delete(waiters, wake)
-	if len(waiters) == 0 {
-		delete(service.turnWaiters, key)
+	entry := &heldMetaTx{nonce: nonce}
+	service.held[key] = append(service.held[key], entry)
+	return entry
+}
+
+// unhold anota que esa metatx dejo de estar retenida, por el motivo que sea.
+//
+// Es idempotente a proposito: a una desalojada ya se la saco del registro al marcarla, y su
+// goroutine llama igual a unhold al despertar. Sin esto el mismo lugar se descontaria dos veces y
+// el cupo del usuario quedaria por debajo del real. Ver design.md, D3.
+func (service *RelaySignerService) unhold(key string, entry *heldMetaTx) {
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+	service.unholdLocked(key, entry)
+}
+
+// unholdLocked saca una retenida del registro. Se llama con el lock TOMADO.
+func (service *RelaySignerService) unholdLocked(key string, entry *heldMetaTx) {
+	waiters := service.held[key]
+	for index, waiter := range waiters {
+		if waiter != entry {
+			continue
+		}
+		service.held[key] = append(waiters[:index], waiters[index+1:]...)
+		break
 	}
+	// Sin esto el mapa se queda con una lista vacia por cada usuario que alguna vez espero turno.
+	if len(service.held[key]) == 0 {
+		delete(service.held, key)
+	}
+}
+
+// waitTurnLocked deja a esa retenida lista para que la despierten y devuelve por donde. Se llama
+// con el lock tomado.
+func (service *RelaySignerService) waitTurnLocked(entry *heldMetaTx) chan struct{} {
+	entry.wake = make(chan struct{})
+	return entry.wake
+}
+
+// stopWaitingLocked anota que esa retenida dejo de estar dormida. Se llama con el lock tomado.
+//
+// El canal NO se cierra aca: cerrarlo es la senal de despertar, y quien deja de esperar por su
+// cuenta -porque vencio su timer o se fue el cliente- no se despierta a si mismo.
+func (service *RelaySignerService) stopWaitingLocked(entry *heldMetaTx) {
+	entry.wake = nil
 }
 
 // notifyTurnLocked despierta a todos los que esperan turno de ese usuario para que reevaluen. Se
 // llama con el lock tomado, cada vez que el proximo nonce esperado pudo haber cambiado.
 func (service *RelaySignerService) notifyTurnLocked(key string) {
-	waiters := service.turnWaiters[key]
-	if waiters == nil {
-		return
+	for _, entry := range service.held[key] {
+		service.wakeLocked(entry)
 	}
-	for wake := range waiters {
-		close(wake)
-	}
-	delete(service.turnWaiters, key)
 }
 
-// waitingOf es cuantas metatx de ese usuario estan retenidas esperando su turno.
+// evictHeldLocked desaloja a una retenida: la marca, la saca del registro y la despierta para que se
+// entere. Se llama con el lock TOMADO, y las tres cosas pasan en la misma seccion critica.
 //
-// Se lleva en un contador propio y no como el tamano del conjunto de los que duermen: entre dos
-// vueltas de la espera, una metatx retenida no esta dormida pero SIGUE retenida, y no contarla ahi
-// dejaria pasar por encima del tope justo en la rafaga que el tope existe para acotar.
-func (service *RelaySignerService) waitingOf(key string) int {
-	return service.heldCount[key]
+// El lugar se descuenta al MARCAR y no cuando la goroutine desalojada despierte. Si se esperara a
+// eso, el lugar liberado no estaria disponible enseguida y el desalojo no serviria de nada. La
+// contracara es que la goroutine llama igual a unhold al despertar, por eso unhold es idempotente.
+// Ver design.md, D3.
+//
+// NO reserva el lugar liberado para quien provoco el desalojo: la puerta no tiene donde anotarlo y
+// el cupo se hace cumplir en la espera, no en la puerta. Ver design.md, D3 y D6.
+func (service *RelaySignerService) evictHeldLocked(key string, entry *heldMetaTx) {
+	entry.evicted = true
+	service.unholdLocked(key, entry)
+	service.wakeLocked(entry)
 }
 
-// hold anota que una metatx de ese usuario quedo retenida.
-func (service *RelaySignerService) hold(key string) {
-	service.sendersLock.Lock()
-	defer service.sendersLock.Unlock()
-	if service.heldCount == nil {
-		service.heldCount = make(map[string]int)
+// highestHeldLocked es la retenida de nonce mas alto de ese usuario, o nil si no tiene ninguna. Se
+// llama con el lock TOMADO.
+//
+// Es la que sobra cuando el cupo se llena: descartar la del medio de una cadena de nonces invalida
+// todas las posteriores -quedan esperando un esperado que ya nunca va a avanzar-, mientras que
+// descartar la mas alta no invalida ninguna.
+//
+// Ante un empate gana la que llego DESPUES: dos retenidas con el mismo nonce son duplicados y el
+// hub solo va a aceptar una. Como el registro esta en orden de llegada, alcanza con exigir nonce
+// estrictamente mayor para quedarse con la ultima de las empatadas. Ver design.md, D4.
+func (service *RelaySignerService) highestHeldLocked(key string) *heldMetaTx {
+	var highest *heldMetaTx
+	for _, entry := range service.held[key] {
+		if highest == nil || entry.nonce >= highest.nonce {
+			highest = entry
+		}
 	}
-	service.heldCount[key]++
+	return highest
 }
 
-// unhold anota que una metatx de ese usuario dejo de estar retenida, por el motivo que sea.
-func (service *RelaySignerService) unhold(key string) {
-	service.sendersLock.Lock()
-	defer service.sendersLock.Unlock()
-	if service.heldCount[key] <= 1 {
-		delete(service.heldCount, key)
+// wakeLocked despierta a una retenida concreta, si esta dormida. Se llama con el lock tomado.
+func (service *RelaySignerService) wakeLocked(entry *heldMetaTx) {
+	if entry.wake == nil {
 		return
 	}
-	service.heldCount[key]--
+	close(entry.wake)
+	entry.wake = nil
 }
 
 // inflightOf es cuantas metatx de ese usuario ocupan lugar: las enviadas y sin resultado, mas las
@@ -259,6 +321,12 @@ func (service *RelaySignerService) inflightOf(from string) int {
 	key := senderKey(from)
 	service.sendersLock.Lock()
 	defer service.sendersLock.Unlock()
+	return service.inflightLocked(key)
+}
+
+// inflightLocked es lo mismo que inflightOf sobre una clave ya normalizada. Se llama con el lock
+// TOMADO, que es lo que permite decidir el cupo y desalojar en una sola seccion critica.
+func (service *RelaySignerService) inflightLocked(key string) int {
 	inflight := service.waitingOf(key)
 	if entry := service.chainLocked(key); entry != nil {
 		inflight += entry.pending

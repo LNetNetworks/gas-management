@@ -26,7 +26,11 @@ import (
 //	                      |
 //	                 espera hasta: avanza e  -> reevaluar (y renovar la ventana)
 //	                               vence     -> relay.turn(window_expired) -> rechazo BAD_NONCE
-//	                               cupo lleno-> relay.turn(too_many_inflight) -> rechazo
+//	                               sobra     -> relay.turn(too_many_inflight) -> rechazo
+//	                               desalojada-> relay.turn(too_many_inflight) -> rechazo
+//
+// "sobra" es ser la de nonce mas alto con el cupo pasado; "desalojada" es que una de nonce mas bajo
+// haya ocupado su lugar. Las dos se deciden por nonce, nunca por orden de llegada.
 
 // Motivos por los que termina una espera. Viajan en `reason` de `relay.turn`.
 const (
@@ -59,16 +63,16 @@ func (service *RelaySignerService) awaitTurn(ctx context.Context, prepared *Prep
 
 	var lastExpected uint64
 	var seenExpected bool
-	held := false
+	var entry *heldMetaTx
 
 	// release solo registra si la metatx llego a retenerse: una que se envia derecho no deja ni
 	// relay.held ni relay.turn.
 	release := func(reason string, expected uint64) {
-		if !held {
+		if entry == nil {
 			return
 		}
-		service.unhold(key)
-		held = false
+		service.unhold(key, entry)
+		entry = nil
 		log.Info(ctx, "relay.turn", map[string]interface{}{
 			"heldMs": time.Since(startedAt).Milliseconds(),
 			"reason": reason,
@@ -91,9 +95,8 @@ func (service *RelaySignerService) awaitTurn(ctx context.Context, prepared *Prep
 			return nil
 		}
 
-		if !held {
-			held = true
-			service.hold(key)
+		if entry == nil {
+			entry = service.hold(key, prepared.Nonce)
 			log.Info(ctx, "relay.held", map[string]interface{}{
 				"nonce":    prepared.Nonce,
 				"expected": expected,
@@ -115,16 +118,20 @@ func (service *RelaySignerService) awaitTurn(ctx context.Context, prepared *Prep
 			return nil
 		}
 
-		// El cupo se vuelve a comprobar ACA y no solo en la puerta: mientras esta metatx espera, el
-		// de su usuario se puede llenar. Sin esto, el motivo real -la rafaga se paso del techo-
-		// quedaria tapado por el BAD_NONCE del vencimiento.
-		if inflight := service.inflightOf(prepared.SenderKey); inflight > service.maxInflightPerUser() {
+		// El cupo se vuelve a comprobar ACA y no solo en la puerta, por dos motivos: mientras esta
+		// metatx espera, el de su usuario se puede llenar -y sin esto el motivo real quedaria
+		// tapado por el BAD_NONCE del vencimiento-, y porque la puerta no serializa a las
+		// peticiones de un mismo usuario, asi que es ACA donde el cupo se hace cumplir.
+		//
+		// La que sobra no es la que esta despertando sino la de nonce mas alto: descartar una del
+		// medio de la cadena invalida todas las posteriores. Ver surplusHeld y design.md, D6.
+		if inflight, surplus := service.surplusHeld(key, entry); surplus {
 			release(turnTooManyInflight, expected)
 			return tooManyInflight(inflight, service.maxInflightPerUser())
 		}
 
 		service.sendersLock.Lock()
-		wake := service.waitTurnLocked(key)
+		wake := service.waitTurnLocked(entry)
 		service.sendersLock.Unlock()
 
 		timer := time.NewTimer(remaining)
@@ -134,7 +141,7 @@ func (service *RelaySignerService) awaitTurn(ctx context.Context, prepared *Prep
 		case <-ctx.Done():
 			timer.Stop()
 			service.sendersLock.Lock()
-			service.stopWaitingLocked(key, wake)
+			service.stopWaitingLocked(entry)
 			service.sendersLock.Unlock()
 			release(turnClientGone, expected)
 			return Reject(errors.New("the client closed the connection while the metatx waited for its turn", -32000),
@@ -143,7 +150,17 @@ func (service *RelaySignerService) awaitTurn(ctx context.Context, prepared *Prep
 		timer.Stop()
 
 		service.sendersLock.Lock()
-		service.stopWaitingLocked(key, wake)
+		service.stopWaitingLocked(entry)
+		// Desperto por desalojo, no para reevaluar: el cupo de su usuario se lleno con metatx de
+		// nonce mas bajo, que son las que pueden destrabar la cola. Se rechaza con el motivo real y
+		// no con el BAD_NONCE del vencimiento, que no explicaria nada.
+		evicted := entry.evicted
+		inflight := service.inflightLocked(key)
 		service.sendersLock.Unlock()
+
+		if evicted {
+			release(turnTooManyInflight, expected)
+			return tooManyInflight(inflight, service.maxInflightPerUser())
+		}
 	}
 }

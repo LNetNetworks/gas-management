@@ -25,8 +25,8 @@ esta: *"una rafaga que ya se paso del techo no tiene que hacer cola para enterar
 **Goals:**
 
 - Que el descarte por cupo elija por nonce y no por orden de llegada.
-- Que el resultado de una rafaga sea **determinista**: mismo conjunto de metatx, mismo desenlace,
-  sin importar el orden de llegada HTTP.
+- Que sea **determinista a quien se descarta**: siempre la de nonce mas alto entre las candidatas,
+  sin importar el orden de llegada HTTP, y por lo tanto que la cadena que sale sea contigua.
 - Conservar el rechazo inmediato: quien tiene el nonce mas alto se entera enseguida, sin hacer cola.
 - No introducir codigos de error nuevos ni cambiar la superficie HTTP.
 
@@ -38,6 +38,8 @@ esta: *"una rafaga que ya se paso del techo no tiene que hacer cola para enterar
 - No se toca la ventana de reordenamiento ni el watcher de resultados.
 - No se propone un reparto justo entre usuarios: el cupo sigue siendo por usuario y global del nodo,
   y esa asimetria queda como esta.
+- No se fija el **numero** de sobrevivientes de una rafaga que se paso del cupo. Lo determinista es
+  a quien se descarta, no cuantas quedan. Ver D7.
 - No se hace **estricto** el cupo instante a instante. Hoy la puerta no serializa a las peticiones de
   un mismo usuario y el tope se puede pasar por un momento; eso se conserva. Lo que el cambio
   garantiza es a quien se rechaza y que el cupo converja al tope. Ver D3.
@@ -182,6 +184,41 @@ escrito en un test para que no se "corrija" por parecer un error de tipeo.
 Corolario del que depende la convergencia: el desborde se corrige **cuando los que esperan
 despiertan**, sea por `notifyTurnLocked` -avanzo el nonce esperado- o por el vencimiento del timer.
 No hay un barrido aparte, y no hace falta: hasta que despierten, las de mas solo ocupan memoria.
+
+### D7: El cupo acota la admision, no la salida
+
+A una metatx ya admitida y a la que le llega su turno NO se le vuelve a comprobar el cupo: se envia.
+Bloquear a una que esta en turno seria descartar del medio de la cadena, que es exactamente el
+defecto que este change viene a arreglar.
+
+La consecuencia es que, al destrabarse la cola, cada retenida corre una carrera:
+
+    despierta una retenida
+         |
+         +-- es mi turno? --SI--> se ENVIA            (no se comprueba el cupo)
+         |
+         +-- soy la de nonce mas alto
+             y el cupo se paso?  --SI--> me rechazo   (too_many_inflight)
+
+Quien gana depende del planificador, asi que el NUMERO de sobrevivientes de una rafaga que se paso
+del cupo no esta fijado. Medido con cupo 3 y rafagas de 5, variando el orden de llegada: sobreviven
+2 o 3 segun la corrida. Y con una rafaga simultanea de 8, el desborde llego a 5-7 retenidas y
+terminaron enviandose 4 metatx -cadena 345..348, contigua- para un usuario con cupo 3.
+
+Lo que SI es determinista, y es lo que importa:
+
+- **a quien se descarta**: siempre la de nonce mas alto entre las candidatas, nunca una del medio;
+- **la contiguidad de lo que sale**: la cadena enviada no tiene huecos, asi que no deja huerfanas;
+- **el motivo del rechazo**: `TOO_MANY_INFLIGHT`, nunca un `BAD_NONCE` que taparia la causa real;
+- **que una de nonce bajo siempre entra**: con el cupo lleno desaloja a la mas alta y ocupa su lugar.
+
+El numero exacto nunca fue el objetivo. El defecto que se arregla es que se rompan cadenas, no que
+sobrevivan N o N+1.
+
+**Alternativa descartada:** comprobar el cupo tambien antes de enviar, en el camino `in_turn`. Daria
+el conteo exacto, pero al precio de poder rechazar a una metatx que ya tiene su turno -con las
+posteriores ya esperandola- y de reintroducir el descarte del medio. Se compra una propiedad que
+nadie pidio al precio de la unica que motiva el change.
 
 ## Risks / Trade-offs
 
