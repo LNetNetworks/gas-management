@@ -355,7 +355,7 @@ func TestEvictFreesTheSlotAtMarkTime(t *testing.T) {
 
 	service.sendersLock.Lock()
 	wake := service.waitTurnLocked(alta)
-	service.evictHeldLocked(key, alta)
+	service.evictHeldLocked(key, alta, service.inflightLocked(key))
 	retenidas := service.waitingOf(key)
 	service.sendersLock.Unlock()
 
@@ -404,7 +404,7 @@ func TestEvictedDoesNotDoubleDiscount(t *testing.T) {
 		go func(entry *heldMetaTx) {
 			defer waiters.Done()
 			service.sendersLock.Lock()
-			service.evictHeldLocked(key, entry)
+			service.evictHeldLocked(key, entry, service.inflightLocked(key))
 			service.sendersLock.Unlock()
 		}(entry)
 		// La goroutine desalojada, que al despertar llama igual a unhold.

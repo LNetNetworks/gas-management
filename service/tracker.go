@@ -190,6 +190,15 @@ type heldMetaTx struct {
 	nonce   uint64
 	wake    chan struct{}
 	evicted bool
+
+	// evictedInflight es el cupo que estaba ocupado en el momento del desalojo, y es el numero que
+	// se le informa al cliente.
+	//
+	// No sirve leerlo al despertar: para entonces esta metatx ya salio del registro -se descuenta
+	// al marcarla, D3- y las demas pueden haber drenado, asi que el conteo de ese momento puede
+	// quedar POR DEBAJO del maximo. Un rechazo por tope superado que informa menos que el tope es
+	// incomprensible para quien lo recibe.
+	evictedInflight int
 }
 
 // waitingOf es cuantas metatx de ese usuario estan retenidas esperando su turno. Se llama con el
@@ -267,8 +276,9 @@ func (service *RelaySignerService) notifyTurnLocked(key string) {
 	}
 }
 
-// evictHeldLocked desaloja a una retenida: la marca, la saca del registro y la despierta para que se
-// entere. Se llama con el lock TOMADO, y las tres cosas pasan en la misma seccion critica.
+// evictHeldLocked desaloja a una retenida: la marca con el cupo que estaba ocupado, la saca del
+// registro y la despierta para que se entere. Se llama con el lock TOMADO, y todo pasa en la misma
+// seccion critica.
 //
 // El lugar se descuenta al MARCAR y no cuando la goroutine desalojada despierte. Si se esperara a
 // eso, el lugar liberado no estaria disponible enseguida y el desalojo no serviria de nada. La
@@ -277,8 +287,9 @@ func (service *RelaySignerService) notifyTurnLocked(key string) {
 //
 // NO reserva el lugar liberado para quien provoco el desalojo: la puerta no tiene donde anotarlo y
 // el cupo se hace cumplir en la espera, no en la puerta. Ver design.md, D3 y D6.
-func (service *RelaySignerService) evictHeldLocked(key string, entry *heldMetaTx) {
+func (service *RelaySignerService) evictHeldLocked(key string, entry *heldMetaTx, inflight int) {
 	entry.evicted = true
+	entry.evictedInflight = inflight
 	service.unholdLocked(key, entry)
 	service.wakeLocked(entry)
 }
