@@ -108,6 +108,18 @@ accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
 #                             # las k+1 en adelante ya salieron y cada una gasto una transaccion
 #                             # del writer node.
 #                             #
+#                             # Al superarlo, la que se descarta es la de nonce MAS ALTO entre las
+#                             # candidatas -la que llega y las que el usuario tiene retenidas-, no
+#                             # la que llego ultima. Si la que llega trae un nonce mas bajo que
+#                             # alguna retenida, se desaloja a la mas alta y entra: la baja es la
+#                             # que puede destrabar la cola, la alta no sirve sin ella. Descartar
+#                             # del medio de la cadena dejaria huerfanas a todas las posteriores.
+#                             #
+#                             # El tope acota la ADMISION, no la salida: a una metatx ya admitida
+#                             # y a la que le llega su turno no se le vuelve a comprobar. Por eso
+#                             # el numero de metatx que sobreviven a una rafaga que se paso del
+#                             # cupo no esta fijado; lo que si esta fijado es a quien se descarta.
+#                             #
 #                             # OJO: la red impone un techo mas bajo. Besu limita cuantas
 #                             # transacciones pendientes admite de UNA cuenta
 #                             # (tx-pool-limit-by-account-percentage, ~5 con los defaults), y la

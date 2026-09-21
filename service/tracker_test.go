@@ -245,3 +245,182 @@ func assertDoorsAgree(t *testing.T, service *RelaySignerService, address common.
 		t.Errorf("%s: las dos puertas difieren: JSON-RPC %s, GET /nonce %s", caso, porRPC, state.Next)
 	}
 }
+
+// Una rafaga retenida y resuelta no deja rastro en el registro de retenidas: ni entradas sueltas ni
+// una lista vacia por usuario. Sin esto el mapa crece con cada usuario que alguna vez espero turno.
+func TestHeldRegistryLeavesNothingBehind(t *testing.T) {
+	service := trackerService(3000)
+	key := senderKey("0xa0f03c489a1bcd53883289d3c476100220b21b0b")
+
+	primera := service.hold(key, 11)
+	segunda := service.hold(key, 12)
+
+	service.sendersLock.Lock()
+	retenidas := service.waitingOf(key)
+	service.sendersLock.Unlock()
+	if retenidas != 2 {
+		t.Fatalf("deberia haber 2 retenidas, hubo %d", retenidas)
+	}
+
+	service.unhold(key, primera)
+	service.unhold(key, segunda)
+
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+	if restantes := service.waitingOf(key); restantes != 0 {
+		t.Errorf("no deberia quedar ninguna retenida, quedaron %d", restantes)
+	}
+	if _, existe := service.held[key]; existe {
+		t.Error("el usuario no deberia seguir en el registro de retenidas: fuga por usuario")
+	}
+}
+
+// unhold es idempotente: una desalojada ya salio del registro al marcarse, y su goroutine llama
+// igual a unhold al despertar. El segundo llamado no puede descontar el lugar de otra.
+func TestUnholdIsIdempotent(t *testing.T) {
+	service := trackerService(3000)
+	key := senderKey("0xa0f03c489a1bcd53883289d3c476100220b21b0b")
+
+	primera := service.hold(key, 11)
+	segunda := service.hold(key, 12)
+
+	service.unhold(key, primera)
+	service.unhold(key, primera)
+
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+	if restantes := service.waitingOf(key); restantes != 1 {
+		t.Errorf("solo deberia quedar la segunda retenida, quedaron %d", restantes)
+	}
+	if service.held[key][0] != segunda {
+		t.Error("la que quedo tiene que ser la segunda: un unhold repetido no puede sacar a otra")
+	}
+}
+
+// La retenida de nonce mas alto es la que sobra cuando el cupo se llena. Ante un empate gana la que
+// llego despues: son duplicados y el hub solo aceptara una.
+func TestHighestHeld(t *testing.T) {
+	key := senderKey("0xa0f03c489a1bcd53883289d3c476100220b21b0b")
+
+	casos := []struct {
+		nombre   string
+		nonces   []uint64
+		esperado int // indice de la retenida esperada, -1 si no hay ninguna
+	}{
+		{"sin retenidas", nil, -1},
+		{"una sola", []uint64{11}, 0},
+		{"varias, la mas alta llego primero", []uint64{14, 11, 12}, 0},
+		{"varias, la mas alta llego ultima", []uint64{11, 12, 14}, 2},
+		{"empate en el maximo: gana la que llego despues", []uint64{12, 14, 11, 14}, 3},
+		{"todas iguales: gana la ultima", []uint64{11, 11, 11}, 2},
+	}
+
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			service := trackerService(3000)
+			var retenidas []*heldMetaTx
+			for _, nonce := range caso.nonces {
+				retenidas = append(retenidas, service.hold(key, nonce))
+			}
+
+			service.sendersLock.Lock()
+			defer service.sendersLock.Unlock()
+			highest := service.highestHeldLocked(key)
+
+			if caso.esperado < 0 {
+				if highest != nil {
+					t.Fatalf("sin retenidas no deberia haber maximo, hubo la de nonce %d", highest.nonce)
+				}
+				return
+			}
+			if highest == nil {
+				t.Fatal("con retenidas tiene que haber un maximo")
+			}
+			if highest != retenidas[caso.esperado] {
+				t.Errorf("la mas alta deberia ser la de indice %d (nonce %d), fue la de nonce %d",
+					caso.esperado, caso.nonces[caso.esperado], highest.nonce)
+			}
+		})
+	}
+}
+
+// El lugar de una desalojada se descuenta al MARCARLA, no cuando su goroutine despierte: si se
+// esperara a eso, el lugar liberado no estaria disponible enseguida y el desalojo no serviria.
+func TestEvictFreesTheSlotAtMarkTime(t *testing.T) {
+	service := trackerService(3000)
+	key := senderKey("0xa0f03c489a1bcd53883289d3c476100220b21b0b")
+
+	baja := service.hold(key, 11)
+	alta := service.hold(key, 12)
+
+	service.sendersLock.Lock()
+	wake := service.waitTurnLocked(alta)
+	service.evictHeldLocked(key, alta)
+	retenidas := service.waitingOf(key)
+	service.sendersLock.Unlock()
+
+	// Todavia nadie desperto y el lugar ya esta libre.
+	if retenidas != 1 {
+		t.Errorf("el lugar deberia descontarse al marcar: quedaban %d retenidas", retenidas)
+	}
+	if !alta.evicted {
+		t.Error("la desalojada tiene que quedar marcada para que su goroutine sepa por que desperto")
+	}
+
+	select {
+	case <-wake:
+	case <-time.After(time.Second):
+		t.Error("desalojar tiene que despertar a la desalojada")
+	}
+
+	// La goroutine desalojada llama igual a unhold al despertar, y eso no puede sacar a la otra.
+	service.unhold(key, alta)
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+	if restantes := service.waitingOf(key); restantes != 1 {
+		t.Errorf("el unhold de la desalojada no puede descontar dos veces, quedaron %d", restantes)
+	}
+	if service.held[key][0] != baja {
+		t.Error("la que sobrevive tiene que ser la de nonce mas bajo")
+	}
+}
+
+// Una goroutine desalojada llama igual a unhold al despertar, concurrentemente con otras que entran
+// y salen del registro. El cupo del usuario nunca puede quedar por debajo del real ni bajar de cero.
+func TestEvictedDoesNotDoubleDiscount(t *testing.T) {
+	service := trackerService(3000)
+	key := senderKey("0xa0f03c489a1bcd53883289d3c476100220b21b0b")
+
+	const retenidas = 32
+	entries := make([]*heldMetaTx, retenidas)
+	for index := range entries {
+		entries[index] = service.hold(key, uint64(index))
+	}
+
+	var waiters sync.WaitGroup
+	for _, entry := range entries {
+		waiters.Add(2)
+		// El desalojo, que descuenta al marcar.
+		go func(entry *heldMetaTx) {
+			defer waiters.Done()
+			service.sendersLock.Lock()
+			service.evictHeldLocked(key, entry)
+			service.sendersLock.Unlock()
+		}(entry)
+		// La goroutine desalojada, que al despertar llama igual a unhold.
+		go func(entry *heldMetaTx) {
+			defer waiters.Done()
+			service.unhold(key, entry)
+		}(entry)
+	}
+	waiters.Wait()
+
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+	if restantes := service.waitingOf(key); restantes != 0 {
+		t.Errorf("no deberia quedar ninguna retenida, quedaron %d", restantes)
+	}
+	if _, existe := service.held[key]; existe {
+		t.Error("el usuario no deberia seguir en el registro")
+	}
+}

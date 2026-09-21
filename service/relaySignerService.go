@@ -47,10 +47,10 @@ type RelaySignerService struct {
 	// senders es el tracker de nonces en vuelo por usuario. Ver tracker.go.
 	senders     map[string]*nonceEntry
 	sendersLock sync.Mutex
-	// turnWaiters son las metatx retenidas por el reordenamiento que estan dormidas esperando que
-	// el nonce esperado avance, y heldCount cuantas hay retenidas en total por usuario.
-	turnWaiters map[string]map[chan struct{}]struct{}
-	heldCount   map[string]int
+	// held son las metatx que el reordenamiento tiene retenidas, por usuario y en orden de llegada.
+	// Cada una lleva su nonce y por donde despertarla: sin eso el cupo solo podria elegir victima
+	// por orden de llegada, que es lo que rompe la cadena. Ver tracker.go y design.md, D1.
+	held map[string][]*heldMetaTx
 	// userLocks serializa la reserva del nonce del hub y el envio POR USUARIO, sin serializar el
 	// throughput entre usuarios. Ver reorder.go.
 	userLocks      map[string]*userLock

@@ -125,8 +125,9 @@ func (service *RelaySignerService) sendReordered(ctx context.Context, prepared *
 	key := senderKey(prepared.SenderKey)
 
 	// El cupo se comprueba ANTES de tomar el candado del usuario: una rafaga que ya se paso del
-	// techo no tiene que hacer cola para enterarse.
-	if inflight := service.inflightOf(prepared.SenderKey); inflight >= service.maxInflightPerUser() {
+	// techo no tiene que hacer cola para enterarse. Lo que cambia respecto de rechazar a secas es
+	// QUIEN sobra: se decide por nonce y no por orden de llegada.
+	if inflight, admitted := service.makeRoomFor(key, prepared.Nonce); !admitted {
 		return common.Hash{}, tooManyInflight(inflight, service.maxInflightPerUser())
 	}
 
@@ -156,6 +157,71 @@ func (service *RelaySignerService) sendReordered(ctx context.Context, prepared *
 	return hash, nil
 }
 
+// makeRoomFor decide si la metatx que llega puede pasar a esperar su turno, desalojando a una
+// retenida si hace falta. Devuelve cuantas habia en vuelo y si se la admite.
+//
+// Con el cupo lleno, la que sobra es la de nonce MAS ALTO entre las candidatas -la que llega y las
+// que su usuario tiene retenidas-. Las metatx de un usuario no son intercambiables: llevan nonces
+// consecutivos que el hub exige exactos, asi que descartar una del medio deja a todas las
+// posteriores esperando un nonce que ya nunca va a avanzar, mientras que descartar la mas alta no
+// invalida ninguna. Decidir por orden de llegada hace que el desenlace de una misma rafaga dependa
+// del azar de la red.
+//
+// Se rechaza a la que llega en dos casos, los dos de D4: cuando su nonce es mayor o igual que el de
+// toda retenida -con nonce igual no hay nada que ganar cambiando de victima, y preferir a la que ya
+// espera conserva el trabajo hecho-, y cuando no hay ninguna retenida porque el cupo esta lleno de
+// metatx ya enviadas, que gastaron una transaccion del writer node y no se pueden deshacer.
+//
+// Todo pasa en una sola seccion critica, pero NO reserva el lugar que libera: la puerta no tiene
+// donde anotarlo, asi que una rafaga simultanea del mismo usuario puede pasar de largo por un
+// momento. El cupo se hace cumplir en la espera. Ver design.md, D3 y D6.
+func (service *RelaySignerService) makeRoomFor(key string, nonce uint64) (int, bool) {
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+
+	inflight := service.inflightLocked(key)
+	if inflight < service.maxInflightPerUser() {
+		return inflight, true
+	}
+
+	highest := service.highestHeldLocked(key)
+	if highest == nil || nonce >= highest.nonce {
+		return inflight, false
+	}
+	service.evictHeldLocked(key, highest)
+	return inflight, true
+}
+
+// surplusHeld dice si esa retenida es la que sobra ahora que el cupo de su usuario se paso del
+// tope, y cuantas hay en vuelo.
+//
+// ACA es donde el cupo se hace cumplir, no en la puerta, y el motivo esta en la forma de los dos
+// predicados:
+//
+//	puerta  "existe alguna retenida con nonce MAYOR que el mio"
+//	        lo pueden satisfacer TODAS las goroutines a la vez -> no se autolimita
+//
+//	espera  "YO soy la de nonce mas alto entre las retenidas"
+//	        lo satisface EXACTAMENTE UNA                       -> se autolimita
+//
+// Por eso la puerta puede dejar pasar de mas ante una rafaga simultanea y esta comprobacion
+// devuelve el cupo a su tope, rechazando de a una a las de nonce mas alto hasta converger. El
+// desborde es transitorio y no gasta transacciones del writer node: las que sobran nunca se
+// enviaron. Ver design.md, D3 y D6.
+//
+// El operador es `>` y no el `>=` de la puerta, y la diferencia es deliberada: la puerta pregunta
+// si hay lugar para una mas, y esto si el cupo YA se paso.
+func (service *RelaySignerService) surplusHeld(key string, entry *heldMetaTx) (int, bool) {
+	service.sendersLock.Lock()
+	defer service.sendersLock.Unlock()
+
+	inflight := service.inflightLocked(key)
+	if inflight <= service.maxInflightPerUser() {
+		return inflight, false
+	}
+	return inflight, service.highestHeldLocked(key) == entry
+}
+
 // maxInflightPerUser es el techo de metatx de un mismo usuario a la vez en vuelo o retenidas.
 func (service *RelaySignerService) maxInflightPerUser() int {
 	if service.Config != nil && service.Config.Reorder.MaxInflightPerUser > 0 {
@@ -169,6 +235,12 @@ func (service *RelaySignerService) maxInflightPerUser() int {
 //
 // Existe para acotar el dano cuando la cadena de nonces se rompe: al rechazarse la metatx `k`, las
 // `k+1` en adelante ya salieron y cada una gasto una transaccion del writer node.
+//
+// QUIEN lo recibe se decide por NONCE y no por orden de llegada: siempre la de nonce mas alto entre
+// las candidatas, que es la unica que se puede descartar sin invalidar a ninguna otra. Lo recibe
+// tanto la que llega y sobra como la retenida que se desaloja para hacerle lugar a una mas baja: es
+// el mismo rechazo, a proposito, para no inventar un codigo de error nuevo. Ver makeRoomFor,
+// surplusHeld y design.md, D3, D6 y D7.
 func tooManyInflight(inflight, max int) *Rejection {
 	cause := errors.New(
 		"exceeded the inflight tx limit for this address: "+decimal(uint64(inflight))+

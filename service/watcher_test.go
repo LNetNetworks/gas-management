@@ -243,8 +243,11 @@ func TestReleaseWakesTheWaiters(t *testing.T) {
 
 	_, chain := reserveNext(service, key, 10)
 
+	// Un waiter es, por construccion, una metatx retenida: primero se registra y recien despues se
+	// duerme sobre su canal.
+	entry := service.hold(key, 11)
 	service.sendersLock.Lock()
-	wake := service.waitTurnLocked(key)
+	wake := service.waitTurnLocked(entry)
 	service.sendersLock.Unlock()
 
 	service.releaseChain(key, chain)
