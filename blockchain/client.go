@@ -86,7 +86,13 @@ func (ec *Client) ConfigTransaction(key *ecdsa.PrivateKey, gasLimit uint64, pend
 }
 
 // SendMetatransaction into blockchain
-func (ec *Client) SendMetatransaction(contractAddress common.Address, options *bind.TransactOpts, to *common.Address, signingData []byte, v uint8, r [32]byte, s [32]byte) (*common.Hash, error) {
+// SendMetatransaction envuelve la metatx en una llamada al RelayHub, la firma con la clave del
+// nodo y la difunde.
+//
+// Devuelve la transaccion enviada y no solo su hash: el nonce de la CUENTA del writer node vive
+// ahi, es el que traba el txpool si algo se pierde, y el unico dato con el que se puede desatascar
+// la cola desde el nodo. El llamador sigue respondiendo el hash al cliente. Ver design.md, D13.
+func (ec *Client) SendMetatransaction(contractAddress common.Address, options *bind.TransactOpts, to *common.Address, signingData []byte, v uint8, r [32]byte, s [32]byte) (*types.Transaction, error) {
 	contract, err := relay.NewRelay(contractAddress, ec.client)
 	if err != nil {
 		msg := fmt.Sprintf("can't instance RelayHub contract %s", contractAddress)
@@ -117,9 +123,7 @@ func (ec *Client) SendMetatransaction(contractAddress common.Address, options *b
 	}
 	log.GeneralLogger.Printf("MetaTransaction sent: %s", tx.Hash().Hex())
 
-	transactionHash := tx.Hash()
-
-	return &transactionHash, nil
+	return tx, nil
 }
 
 func (ec *Client) GenerateTransaction(options *bind.TransactOpts, to *common.Address, relayAddress common.Address, signingData []byte, v uint8, r, s [32]byte) (*types.Transaction, error) {
@@ -345,4 +349,81 @@ func (ec *Client) AccountPermitted(contractAddress, senderAddress common.Address
 	}
 
 	return isPermitted, nil
+}
+
+// ChainID es el identificador de la cadena a la que esta conectado el nodo.
+//
+// Lo necesita `GET /info` para que un integrador confirme contra que red esta firmando, que es la
+// causa habitual de una metatx que revierte sin explicacion.
+func (ec *Client) ChainID(ctx context.Context) (*big.Int, error) {
+	chainID, err := ec.client.ChainID(ctx)
+	if err != nil {
+		err = errors.CallBlockchainFailed.Wrapf(err, "can't get chain id", -32603)
+		return nil, err
+	}
+	return chainID, nil
+}
+
+// BalanceOf es el balance de una cuenta, en wei.
+//
+// Es el balance de la cuenta del nodo lo que interesa: si se queda sin fondos, deja de poder
+// difundir las transacciones envolventes y ninguna metatx llega a la cadena.
+func (ec *Client) BalanceOf(ctx context.Context, address common.Address) (*big.Int, error) {
+	balance, err := ec.client.BalanceAt(ctx, address, nil)
+	if err != nil {
+		msg := fmt.Sprintf("can't get balance for %s", address.Hex())
+		err = errors.CallBlockchainFailed.Wrapf(err, msg, -32603)
+		return nil, err
+	}
+	return balance, nil
+}
+
+// El registro de permisos de la red (AccountIngress) publica, por nombre, la direccion de cada
+// contrato del permisionado. El de cuentas se guarda bajo el nombre "rules".
+//
+// Se lee con una llamada de contrato armada aca y no con bindings generados: es UNA funcion de
+// lectura, y generar bindings para ella agregaria un artefacto que hay que mantener al lado de un
+// contrato que no controlamos.
+const accountIngressABI = `[{"constant":true,"inputs":[{"name":"name","type":"bytes32"}],` +
+	`"name":"getContractAddress","outputs":[{"name":"","type":"address"}],` +
+	`"payable":false,"stateMutability":"view","type":"function"}]`
+
+// rulesContractName es "rules" en bytes32, rellenado con ceros a la derecha.
+func rulesContractName() [32]byte {
+	var name [32]byte
+	copy(name[:], "rules")
+	return name
+}
+
+// HasCode indica si esa direccion tiene codigo en esta cadena.
+//
+// Una direccion sin codigo no es un contrato: preguntarle algo devuelve vacio, y un decodificador
+// que interpreta vacio como "false" convertiria una direccion equivocada en un "no permitido"
+// silencioso.
+func (ec *Client) HasCode(address common.Address) (bool, error) {
+	code, err := ec.client.CodeAt(context.Background(), address, nil)
+	if err != nil {
+		msg := fmt.Sprintf("failed to read the code at %s", address.Hex())
+		return false, errors.CallBlockchainFailed.Wrapf(err, msg, -32603)
+	}
+	return len(code) > 0, nil
+}
+
+// ResolveAccountRules devuelve la direccion del contrato de reglas que publica el registro de
+// permisos de la red, o la direccion cero si el registro no tiene ninguno registrado.
+func (ec *Client) ResolveAccountRules(ingress common.Address) (common.Address, error) {
+	parsed, err := abi.JSON(strings.NewReader(accountIngressABI))
+	if err != nil {
+		return common.Address{}, errors.FailedContract.Wrapf(err, "can't parse the AccountIngress ABI", -32603)
+	}
+
+	// El resultado se recibe en un puntero al tipo concreto: esta version de go-ethereum desempaqueta
+	// asi, no en una lista de valores.
+	contract := bind.NewBoundContract(ingress, parsed, ec.client, ec.client, ec.client)
+	var resolved common.Address
+	if err := contract.Call(&bind.CallOpts{}, &resolved, "getContractAddress", rulesContractName()); err != nil {
+		msg := fmt.Sprintf("failed to resolve the account rules contract from the AccountIngress %s", ingress.Hex())
+		return common.Address{}, errors.CallBlockchainFailed.Wrapf(err, msg, -32603)
+	}
+	return resolved, nil
 }

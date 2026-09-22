@@ -1,32 +1,75 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Proyecto: `gas-relay-signer` (LACChain gas model) en Go 1.x, con `go-ethereum v1.9.15`.
+  Es el servicio off-chain en Go que hace posible que LNet sea gasless para el usuario final: el modelo de meta-transacciones "clásico" (GSN).
+  Qué hace: actúa como relayer JSON-RPC delante del nodo Besu — recibe la meta-transacción firmada por el usuario (que no tiene cuenta con fondos ni permisos de escritura), la envuelve en una llamada a relayMetaTx del contrato RelayHub, la firma con la clave del nodo (keystore del agente) y la envía a la blockchain con gasPrice = 0.
+  Dónde vive y cómo se configura: corre en cada nodo writer/validador; config.toml define nodeURL/wsURL, la dirección del RelayHub, el keystore + passphrase del agente y el toggle de permisionado. writer/gas-relay-signer/ es una copia desplegada — el código fuente se toca aquí.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  stack: Go 1.x, go-ethereum v1.9.15, Besu 22.10.0, LACChain gas model, GSN v2.
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  Paquetes: `main.go` (rutas), `controller/` (relayController, processController),
+  `service/relaySignerService.go` (nucleo), `blockchain/` (cliente RPC), `relayhub/`,
+  `rpc/` (JSON-RPC), `model/Config.go` + `config.toml`, `audit/` (log a archivo), `errors/`.
+  Hoy expone una sola ruta HTTP: `POST /` catch-all JSON-RPC, en el puerto `9001`.
+
+  Capas: controller/ (HTTP) → service/ (lógica, bloques, firma) → blockchain/ (clientes go-ethereum RPC/WS) + relayhub/ (bindings del contrato); apoyo en model/, rpc/, audit/, errors/.
+
+  Flujo : (main.go → controller/ → service/):
+  1. Levanta un servidor HTTP en [application].port con un único handler POST / → relayController.SignTransaction; los clientes le apuntan como si fuera el RPC del nodo (métodos eth_sendRawTransaction, relay_getMetaTxResult, etc.).
+  2. Decodifica la raw tx del usuario (firma pre-EIP155) y extrae los parámetros extra del gas model: nodeAddress, expirationDate, gasLimit.
+  3. Valida contra el nodo y el RelayHub (permisionado del nodo que relaya, ventanas de gas por bloque, nonce local por par (nodo, usuario)).
+  4. Re-firma la transacción envolvente con la cuenta del nodo y la difunde; el contrato destino recupera el emisor real vía _msgSender() de BaseRelayRecipient.
+  5. En paralelo, la goroutine ProcessNewBlocks sigue los bloques nuevos por WebSocket para resolver los eventos del RelayHub, mantener el estado/nonces de los senders y exponer el resultado de cada meta-tx (ErrorCode: OK=8, BadNonce=2, etc.).
+
+  Invariantes de proyecto: (acotan toda propuesta)
+
+  1. Compatibilidad del contrato JSON-RPC. POST / es la única ruta y su semántica actual no cambia: un cliente que hoy apunta el RelaySigner como si fuera el RPC del nodo debe seguir funcionando byte a byte. (ya está en config.yaml)
+  2. Todo lo nuevo entra tras flag apagado por defecto en config.toml. Ninguna funcionalidad portada desde node_relayer se activa sin opt-in explícito. (ya está)
+  3. Verde continuo: cada cambio deja go build y go test ./... en verde. (ya está)
+  4. No se pierde lo que Go tiene y Node no: contabilidad del cupo de gas por bloque (ProcessNewBlocks + VerifyGasLimit), relay_getMetaTxResult, y el passthrough de tx privadas priv_*/eea_*. Cualquier refactor que las degrade es rechazable por definición. (está como nota de contexto — merece ser invariante explícita)
+  5. Toda propuesta se encuadra como cierre de una brecha concreta contra node_relayer, citando el documento fuente. (está en el objetivo; es una invariante de proceso)
+
+  Invariantes de dominio: (candidatas a Requirement)
+
+  6. El proceso nunca muere por un fallo externo. Cualquier fallo de red, transporte, protocolo o decodificación se devuelve como error JSON-RPC al llamador; nunca panic, nunca continuar con datos inválidos. Ya está escrita para relayhub-address-resolution, pero es global: aplica a todo blockchain/client.go y a cada HandleError. Hoy hay puntos que la violan (log.GeneralLogger.Fatal en DecreaseGasUsed, errores de HandleError ignorados en SendMetatransaction/VerifyGasLimit).
+  7. El sobre siempre lo firma el nodo, nunca el usuario. La tx envolvente se firma con la clave del nodo (WRITER_KEY) y sale con gasPrice = 0; la firma del usuario viaja como (v, r, s) + signingData RLP dentro de relayMetaTx. El emisor original se recupera on-chain vía _msgSender(), jamás se sustituye el from.
+  8. Solo firmas pre-EIP155. v ∈ {27, 28}; una raw tx firmada con EIP-155 se rechaza temprano con mensaje accionable y no se relaya. Es una invariante de seguridad real: sin ella el truncamiento del v produce una meta-tx que revierte on-chain sin diagnóstico.
+  9. El permisionado es del nodo, no del sender en el camino on-chain; el chequeo de AccountRules sobre el sender es adicional y solo activo si security.permissionsEnabled. Ninguna propuesta debe invertir esta relación.
+  10. Ventana de gas por bloque: GAS_LIMIT acumula el gas comprometido dentro del bloque en curso y se resetea a 0 en cada nueva cabecera. Invariante: GAS_LIMIT refleja solo el bloque actual, y la reserva (increment) y la validación (VerifyGasLimit) ocurren bajo el mismo lock, de forma atómica frente a otros envíos. La resincronización tras una reconexión WS es automática, no requiere intervención.
+  11. La goroutine de bloques sobrevive al nodo. Caída del WebSocket ⇒ reconexión con backoff exponencial acotado (1s → 30s); nunca termina salvo señal de done. El servicio HTTP sigue respondiendo mientras tanto.
+  12. El caché de nonces nunca adelanta al nonce real on-chain de forma permanente. Tres sub-invariantes, todas ya codificadas y con historia de bug detrás:
+      - la clave se normaliza a minúsculas (senderKey) — una address = una entrada;
+      - incrementTransactionCount toma max(cache, nonce+1), nunca +1 a ciegas;
+      - un BadTransactionSent invalida la entrada (invalidateNonce), y toda entrada expira por TTL (nonceCacheTTL, default 300s).
+
+      La propiedad observable: ninguna secuencia de errores o concurrencia puede dejar una address bloqueada de forma indefinida.
+  13. eth_getTransactionCount "pending" es autoritativo para el cliente: lo que el RelaySigner responde es el nonce que el RelayHub aceptará a continuación; si el caché no puede garantizarlo, se relee on-chain en lugar de responder un valor optimista.
+  14. No se filtran secretos ni payloads a stdout. La clave, la passphrase y los cuerpos crudos de las peticiones al nodo no se escriben en salida estándar; el logging va al logger de auditoría. Ya está escrita para la resolución del proxy; es global.
+  15. Un cambio de config no cambia el binario desplegado. config.toml es una plantilla por despliegue (valores de ejemplo), y writer/gas-relay-signer/ es una copia desplegada: el código fuente se toca solo aquí.
+
+  OBJETIVO PRINCIPAL DEL REPO: paridad funcional con el relayer en Node que vive en
+  `/Users/edumar111/lnet/workspace/lnet-repos/node_relayer` — traer al RelaySigner en Go las
+  funcionalidades que hoy solo existen alli. Toda propuesta de cambio en esta linea debe
+  encuadrarse como el cierre de una brecha concreta contra ese repo.
+
+  Fuentes de verdad de las brechas, a leer antes de proponer:
+  - `node_relayer/COMPARACION-GO-NODE.md` — nonces, concurrencia, cupo de gas.
+  - `node_relayer/ENDPOINTS-GO-VS-NODE.md` — superficie HTTP/RPC campo a campo.
+  - `node_relayer/DASHBOARD.md` — contrato de eventos SSE y corrida de referencia.
+  - `docs/PLAN-reorden-dashboard.md` — plan por fases de una parte del portado.
+
+  Brechas conocidas (Node las tiene, Go no): reordenamiento de nonces con tracker autoritativo de
+  lo en vuelo; endpoints `/info`, `/nonce/{address}`, `/relay`; dashboard SSE; log estructurado
+  JSON con `reqId`; passthrough RPC completo, batches y `eth_subscribe`; CORS; pre-chequeo por
+  simulacion `eth_call`; validacion del sufijo del gas model (`nodeAddress`, `expiration`) y
+  `AccountRules` via `AccountIngress`; cliente RPC compartido; lock global acotado al envio.
+
+  Lo que Go tiene y Node no, y NO se debe perder al portar: contabilidad del cupo de gas por
+  bloque (`ProcessNewBlocks` + `VerifyGasLimit`), `relay_getMetaTxResult`, y las transacciones
+  privadas `priv_*`/`eea_*`.
+
+  Convenciones: compatibilidad primero — el contrato JSON-RPC actual de `POST /` no cambia, y
+  todo lo nuevo va detras de flags en `config.toml` apagados por defecto. Cada cambio deja el
+  binario compilando y `go test ./...` en verde. La documentacion del proyecto se escribe en
+  espanol.

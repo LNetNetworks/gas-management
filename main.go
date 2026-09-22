@@ -15,12 +15,14 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"time"
 
 	log "github.com/LACNetNetworks/gas-relay-signer/audit"
 	"github.com/LACNetNetworks/gas-relay-signer/controller"
+	"github.com/LACNetNetworks/gas-relay-signer/events"
 	"github.com/LACNetNetworks/gas-relay-signer/model"
 	"github.com/LACNetNetworks/gas-relay-signer/service"
 	"github.com/spf13/viper"
@@ -40,12 +42,25 @@ func main() {
 
 	config = getConfigFromFile()
 
+	// El emisor estructurado y el bus se inicializan aca: con la configuracion ya leida y ANTES
+	// de levantar el servidor, para que ningun evento salga con una capacidad o un nivel que
+	// todavia no se leyeron. No va en un init() porque corre antes de que exista config.toml,
+	// ni en una inicializacion perezosa, que esconderia el orden justo donde importa. Ver D5.
+	log.InitStructured(config.Log.Level, config.Log.RawTx)
+	events.Init(config.Dashboard.Enabled, config.Dashboard.BufferSize)
+
 	relaySignerService = new(service.RelaySignerService)
 	err := relaySignerService.Init(config)
 	if err != nil {
 		log.GeneralLogger.Fatal(err)
 		return
 	}
+
+	// De donde sale el contrato de reglas se resuelve UNA vez, aca: es una propiedad de la red, no
+	// de cada peticion. No aborta el arranque en ningun caso -ni con el nodo caido, ni con este nodo
+	// sin permiso-, porque un binario que no levanta diagnostica peor que uno que lo informa en
+	// `GET /info`. Ver design.md de 05-add-metatx-validation, D5 y D6.
+	relaySignerService.ResolveAccountRules(context.Background())
 
 	relayController = new(controller.RelayController)
 	relayController.Init(config, relaySignerService)
@@ -68,18 +83,28 @@ func getConfigFromFile() *model.Config {
 		log.GeneralLogger.Printf("couldn't read config: %s", err)
 		os.Exit(1)
 	}
+	// Los bloques [reorder], [dashboard] y [log] se leen aparte, clave por clave: un valor
+	// invalido en cualquiera de ellos cae a su default y se registra, pero no aborta el arranque.
+	var discarded []model.DiscardedKey
+	c.Reorder, c.Dashboard, c.Log, c.CORS, discarded = model.LoadRuntimeBlocks(v)
+	validation, permissioning, descartadasValidacion := model.LoadValidationBlocks(v)
+	c.Validation, c.Permissioning = validation, permissioning
+	discarded = append(discarded, descartadasValidacion...)
+	for _, key := range discarded {
+		log.GeneralLogger.Printf("config: se descarto %s = %v (%s), se usa el valor por defecto",
+			key.Key, key.Value, key.Reason)
+	}
 	log.GeneralLogger.Printf("smartContract=%s AgentKey=%s\n", c.Application.ContractAddress, c.KeyStore.Agent)
 	return &c
 }
 
 func setupRoutes(port string) {
 	log.GeneralLogger.Println("Init RelaySigner")
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", relayController.SignTransaction)
+	handler := relayController.Handler()
 	// http.Server con timeouts explícitos (evita Slowloris/DoS — gosec G114).
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      120 * time.Second,
