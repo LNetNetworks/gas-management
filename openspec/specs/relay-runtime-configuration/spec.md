@@ -30,7 +30,7 @@ Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 |---|---|
 | `reorder.enabled` | `false` |
 | `reorder.windowMs` | `3000` |
-| `reorder.maxInflightPerUser` | `16` |
+| `reorder.maxInflightPerUser` | `5` |
 | `reorder.receiptTimeoutMs` | `60000` |
 | `reorder.autoNonce` | `false` |
 | `reorder.autoNonceTicketMs` | `2000` |
@@ -38,6 +38,13 @@ Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 | `dashboard.bufferSize` | `500` |
 | `log.level` | `info` |
 | `log.rawTx` | `false` |
+
+El default de `reorder.maxInflightPerUser` iguala el techo que la red impone POR CUENTA: Besu acota
+cuantas transacciones pendientes admite de una sola cuenta, y esa cuenta es la del writer node,
+remitente de todas las envolventes. Un cupo por encima de ese techo no agrega ninguna metatx minada
+-el que decide es Besu- y en cambio admite metatx que van a ocupar la ventana de reordenamiento
+entera para terminar rechazadas por nonce equivocado, que no es el motivo real. Al ras del techo,
+lo que no cabe se rechaza en la puerta indicando que se supero el limite.
 
 #### Scenario: Los bloques estan ausentes
 
@@ -66,6 +73,12 @@ Cuando una clave esta ausente, el sistema SHALL aplicar su valor por defecto:
 - **WHEN** el servicio arranca con un `config.toml` anterior a estas capacidades
 - **THEN** arranca sin error y con el reordenamiento y el reparto de nonces apagados
 - **AND** no hace falta agregar ninguna clave
+
+#### Scenario: El tope por usuario no se fija
+
+- **WHEN** `config.toml` no fija `reorder.maxInflightPerUser`
+- **THEN** el tope por usuario es 5
+- **AND** `GET /info` informa ese valor
 
 ### Requirement: Compatibilidad con la configuracion existente
 
