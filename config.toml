@@ -103,7 +103,7 @@ accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
 #                             # no pierde la cola por reloj estando todo sano. Es tambien la gracia
 #                             # antes de olvidar a un usuario que se quedo sin metatx en vuelo
 #
-# maxInflightPerUser = 16     # tope de metatx del mismo usuario en vuelo o retenidas. Acota el
+# maxInflightPerUser = 5      # tope de metatx del mismo usuario en vuelo o retenidas. Acota el
 #                             # dano cuando la cadena de nonces se rompe: al rechazarse la metatx k,
 #                             # las k+1 en adelante ya salieron y cada una gasto una transaccion
 #                             # del writer node.
@@ -120,14 +120,24 @@ accountContractAddress = "0x4683519EF834572017Cb583246B717449A4B752c"
 #                             # el numero de metatx que sobreviven a una rafaga que se paso del
 #                             # cupo no esta fijado; lo que si esta fijado es a quien se descarta.
 #                             #
-#                             # OJO: la red impone un techo mas bajo. Besu limita cuantas
-#                             # transacciones pendientes admite de UNA cuenta
+#                             # El default IGUALA el techo que impone la red, y ese es el criterio
+#                             # para elegirlo -no el numero-. Besu limita cuantas transacciones
+#                             # pendientes admite de UNA cuenta
 #                             # (tx-pool-limit-by-account-percentage, ~5 con los defaults), y la
 #                             # cuenta que importa es la del writer node, remitente de TODAS las
-#                             # envolventes. Medido en pro-testnet: rafagas de 5 entran enteras y
-#                             # la sexta la rechaza besu con "nonce too distant". Subir este numero
-#                             # por encima de ese techo no sirve mientras los validadores no suban
-#                             # el suyo.
+#                             # envolventes. Si los validadores suben el suyo, subi este.
+#                             #
+#                             # Subirlo por encima del techo no mina ni una metatx mas -el que
+#                             # decide es Besu- y empeora los rechazos: las que sobran ocupan la
+#                             # ventana entera para terminar rechazadas por nonce, que no es el
+#                             # motivo real. Medido con rafagas de 12 de un usuario, 4 corridas por
+#                             # valor: con 5 se minan 5 y NINGUNA muere por nonce; con 7 se minan
+#                             # las mismas 5 y mueren 1-2 por nonce tras esperar la ventana; con 16,
+#                             # 6 de 7 rechazos son por nonce despues de ~3,8 s en vez de ~0,7 s.
+#                             #
+#                             # Bajarlo NO castiga el rendimiento: el descarte elige por nonce, asi
+#                             # que la cadena no se rompe. Bajarlo por DEBAJO del techo si cuesta:
+#                             # con 2, un usuario solo mina 2 de 12.
 #
 # receiptTimeoutMs = 60000    # cuanto se espera el resultado de una metatx enviada antes de darla
 #                             # por indeterminada y liberar el lugar que ocupa

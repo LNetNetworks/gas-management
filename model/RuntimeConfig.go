@@ -12,8 +12,15 @@ import (
 // Valores por defecto de los bloques [reorder], [dashboard] y [log]. Son conservadores a
 // proposito: con ellos el servicio se comporta igual que antes de que existieran.
 const (
-	DefaultReorderWindowMs           = 3000
-	DefaultReorderMaxInflightPerUser = 16
+	DefaultReorderWindowMs = 3000
+	// DefaultReorderMaxInflightPerUser iguala el techo que la red impone POR CUENTA: Besu acota
+	// cuantas transacciones pendientes admite de una sola cuenta -tx-pool-limit-by-account-percentage,
+	// ~5 con los defaults- y esa cuenta es la del writer node, remitente de TODAS las envolventes.
+	//
+	// Por encima de ese techo no se mina ni una metatx mas -el que decide es Besu- y en cambio se
+	// admiten metatx que van a ocupar la ventana entera para terminar rechazadas por nonce, que no
+	// es el motivo real. Si los validadores suben su techo, este numero los sigue.
+	DefaultReorderMaxInflightPerUser = 5
 	DefaultReorderReceiptTimeoutMs   = 60000
 	DefaultReorderAutoNonceTicketMs  = 2000
 	DefaultDashboardBufferSize       = 500

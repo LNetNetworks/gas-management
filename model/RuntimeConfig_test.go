@@ -54,8 +54,8 @@ func TestRuntimeBlocksAbsentUseDefaults(t *testing.T) {
 	if reorder.WindowMs != 3000 {
 		t.Errorf("reorder.windowMs por defecto = %d, se esperaba 3000", reorder.WindowMs)
 	}
-	if reorder.MaxInflightPerUser != 16 {
-		t.Errorf("reorder.maxInflightPerUser por defecto = %d, se esperaba 16", reorder.MaxInflightPerUser)
+	if reorder.MaxInflightPerUser != 5 {
+		t.Errorf("reorder.maxInflightPerUser por defecto = %d, se esperaba 5", reorder.MaxInflightPerUser)
 	}
 	if reorder.ReceiptTimeoutMs != 60000 {
 		t.Errorf("reorder.receiptTimeoutMs por defecto = %d, se esperaba 60000", reorder.ReceiptTimeoutMs)
@@ -97,7 +97,7 @@ bufferSize = 200
 	if dashboard.BufferSize != 200 {
 		t.Errorf("dashboard.bufferSize = %d, se esperaba 200", dashboard.BufferSize)
 	}
-	if reorder.MaxInflightPerUser != 16 {
+	if reorder.MaxInflightPerUser != 5 {
 		t.Errorf("una clave no especificada debe conservar su default, maxInflightPerUser = %d", reorder.MaxInflightPerUser)
 	}
 	if dashboard.Enabled {
@@ -176,8 +176,8 @@ maxInflightPerUser = 0
 	if reorder.WindowMs != 3000 {
 		t.Errorf("reorder.windowMs = %d, se esperaba el default 3000", reorder.WindowMs)
 	}
-	if reorder.MaxInflightPerUser != 16 {
-		t.Errorf("reorder.maxInflightPerUser = %d, se esperaba el default 16", reorder.MaxInflightPerUser)
+	if reorder.MaxInflightPerUser != 5 {
+		t.Errorf("reorder.maxInflightPerUser = %d, se esperaba el default 5", reorder.MaxInflightPerUser)
 	}
 	if !discardedHas(discarded, "reorder.windowMs") {
 		t.Errorf("no se registro el descarte de reorder.windowMs, se registro %v", discarded)
