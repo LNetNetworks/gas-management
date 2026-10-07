@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/LACNetNetworks/gas-relay-signer/audit"
 	"github.com/LACNetNetworks/gas-relay-signer/rpc"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,65 +16,12 @@ import (
 
 const DATA_CALL_RELAYHUB = "0x7bdf2ec7"
 
-func isPoolEmpty(rpcURL string, id json.RawMessage) (bool, error) {
-	data := fmt.Sprintf(`{"jsonrpc":"2.0","method":"txpool_besuTransactions",
-	"params":[], "id":"%s"}`, id)
-
-	requestBody := []byte(data)
-
-	timeout := time.Duration(5 * time.Second)
-	client := http.Client{
-		Timeout: timeout,
-	}
-
-	request, err := http.NewRequest("POST", rpcURL, bytes.NewBuffer(requestBody))
-	request.Header.Set("Content-type", "application/json")
-
-	if err != nil {
-		return false, err
-	}
-
-	response, err := client.Do(request)
-	if err != nil {
-		return false, err
-	}
-
-	defer response.Body.Close()
-
-	body, err := ioutil.ReadAll(response.Body)
-
-	if err != nil {
-		return false, err
-	}
-
-	rdr1 := ioutil.NopCloser(bytes.NewBuffer(body))
-
-	var rpcMessage rpc.JsonrpcMessage
-
-	err = json.NewDecoder(rdr1).Decode(&rpcMessage)
-	if err != nil {
-		return false, err
-	}
-
-	audit.GeneralLogger.Println("Transactions in pool:", rpcMessage.String())
-
-	var v []json.RawMessage
-	err = json.Unmarshal(rpcMessage.Result, &v)
-	if err != nil {
-		return false, err
-	}
-
-	if len(v) > 0 {
-		return false, nil
-	}
-
-	return true, nil
-}
-
+// getRelayHubContractAddress resuelve la address del RelayHub consultando su proxy vía eth_call.
+// Se ejecuta en el arranque del servicio: toda ruta de fallo (red, error json-rpc, resultado
+// vacío o malformado, decodificación ABI) retorna error para que el llamador lo traduzca a
+// FailedKeyConfig (-32610); nunca debe hacer panic ni continuar con datos inválidos.
 func getRelayHubContractAddress(rpcURL string, id string, relayHubProxyAddress string, _timeout int) (*common.Address, error) {
 	data := fmt.Sprintf(`{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"%s","data":"%s"},"latest"], "id":"%s"}`, relayHubProxyAddress, DATA_CALL_RELAYHUB, id)
-
-	fmt.Println(data)
 
 	requestBody := []byte(data)
 
@@ -84,11 +31,11 @@ func getRelayHubContractAddress(rpcURL string, id string, relayHubProxyAddress s
 	}
 
 	request, err := http.NewRequest("POST", rpcURL, bytes.NewBuffer(requestBody))
-	request.Header.Set("Content-type", "application/json")
-
 	if err != nil {
 		return nil, err
 	}
+
+	request.Header.Set("Content-type", "application/json")
 
 	response, err := client.Do(request)
 	if err != nil {
@@ -97,13 +44,13 @@ func getRelayHubContractAddress(rpcURL string, id string, relayHubProxyAddress s
 
 	defer response.Body.Close()
 
-	body, err := ioutil.ReadAll(response.Body)
+	body, err := io.ReadAll(response.Body)
 
 	if err != nil {
 		return nil, err
 	}
 
-	rdr1 := ioutil.NopCloser(bytes.NewBuffer(body))
+	rdr1 := io.NopCloser(bytes.NewBuffer(body))
 
 	var rpcMessage rpc.JsonrpcMessage
 
@@ -112,13 +59,27 @@ func getRelayHubContractAddress(rpcURL string, id string, relayHubProxyAddress s
 		return nil, err
 	}
 
-	var resultData string = string(rpcMessage.Result)
+	if rpcMessage.Error != nil {
+		return nil, fmt.Errorf("node returned a json-rpc error resolving the relayHub address: %s", rpcMessage.Error.Error())
+	}
 
-	responseData := common.Hex2Bytes(resultData[3 : len(resultData)-1])
+	var resultHex string
+	if err := json.Unmarshal(rpcMessage.Result, &resultHex); err != nil {
+		return nil, fmt.Errorf("can't decode eth_call result as a hex string: %w", err)
+	}
+
+	resultHex = strings.TrimPrefix(resultHex, "0x")
+
+	// Una address codificada en ABI es exactamente una palabra de 32 bytes (64 chars hex).
+	if len(resultHex) != 64 {
+		return nil, fmt.Errorf("unexpected eth_call result length resolving the relayHub address: got %d hex chars, want 64", len(resultHex))
+	}
+
+	responseData := common.Hex2Bytes(resultHex)
 
 	addressPacked, err := abi.NewType("address", "", nil)
 	if err != nil {
-		fmt.Println(err)
+		return nil, err
 	}
 
 	resultPayloadPacked := abi.Arguments{
@@ -127,10 +88,17 @@ func getRelayHubContractAddress(rpcURL string, id string, relayHubProxyAddress s
 
 	addressUnpacked, err := resultPayloadPacked.UnpackValues(responseData)
 	if err != nil {
-		fmt.Println(err)
+		return nil, err
 	}
 
-	relayHubAddress := addressUnpacked[0].(common.Address)
+	if len(addressUnpacked) == 0 {
+		return nil, fmt.Errorf("eth_call result unpacked to no values resolving the relayHub address")
+	}
+
+	relayHubAddress, ok := addressUnpacked[0].(common.Address)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type %T resolving the relayHub address, want common.Address", addressUnpacked[0])
+	}
 
 	return &relayHubAddress, nil
 }

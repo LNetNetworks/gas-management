@@ -1,0 +1,17 @@
+{
+  "name": "lnet-token-lacchain-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Broadcast y app web3 sobre LNet (gas model LACChain): ethers v6 + @lacchain/gas-model-provider.",
+  "scripts": {
+    "deploy": "node deploy.js",
+    "send": "node send-tx.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@lacchain/gas-model-provider": "^1.2.1",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.0"
+  }
+}

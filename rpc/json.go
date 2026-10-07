@@ -42,6 +42,7 @@ const (
 	getTransactionReceiptSuffix     = "_getTransactionReceipt"
 	getTransactionCountSuffix       = "_getTransactionCount"
 	getBlockByNumber  				= "_getBlockByNumber"
+	getMetaTxResultSuffix           = "_getMetaTxResult"
 
 	defaultWriteTimeout = 10 * time.Second // used if context has no deadline
 )
@@ -111,6 +112,11 @@ func (msg *JsonrpcMessage) IsGetTransactionReceipt() bool {
 //IsGetTransactionCount ...
 func (msg *JsonrpcMessage) IsGetTransactionCount() bool {
 	return strings.HasSuffix(msg.Method, getTransactionCountSuffix)
+}
+
+// IsGetMetaTxResult ...
+func (msg *JsonrpcMessage) IsGetMetaTxResult() bool {
+	return strings.HasSuffix(msg.Method, getMetaTxResultSuffix)
 }
 
 //IsGetBlockByNumber ...

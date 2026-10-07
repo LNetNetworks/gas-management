@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>simple_relay · monitor de metatx</title>
+<style>
+  /*
+   * Paleta: los colores de estado son los del sistema de datos (good/warning/critical) y nunca
+   * cargan solos el significado -- cada marca lleva glifo + etiqueta, que es lo que sostiene el
+   * par verde/rojo para daltonismo deutan y el amarillo sobre fondo claro.
+   */
+  :root {
+    color-scheme: light;
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --sunken: #f2f1ee;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --chain: #2a78d6;
+    --held: #fab219;
+    --ok: #0ca30c;
+    --bad: #d03b3b;
+    --relayer: #c3c2b7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --plane: #0d0d0d;
+      --surface: #1a1a19;
+      --sunken: #131312;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --chain: #3987e5;
+      --relayer: #383835;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: var(--plane);
+    color: var(--ink);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 11px; margin: 0 0 10px; font-weight: 600; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+
+  /* --- cabecera --- */
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  header .meta { color: var(--muted); font-size: 11.5px; }
+  header .meta b { color: var(--ink-2); font-weight: 500; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .live[data-on="1"] .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+  .live[data-on="0"] .dot { background: var(--bad); }
+
+  /* --- fila de controles --- */
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  select, button, input {
+    font: inherit; font-size: 12px; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 9px;
+  }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--baseline); }
+  button[aria-pressed="true"] { background: var(--sunken); border-color: var(--baseline); }
+  .controls .spacer { flex: 1; }
+
+  /* --- tarjetas de resumen --- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .stat .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat .v { font-size: 26px; line-height: 1.15; margin-top: 2px; font-weight: 550; }
+  .stat .u { font-size: 11px; color: var(--muted); margin-left: 2px; font-weight: 400; }
+  .stat[data-tone="held"] .v { color: var(--held); }
+  .stat[data-tone="chain"] .v { color: var(--chain); }
+  .stat[data-tone="ok"] .v { color: var(--ok); }
+  .stat[data-tone="bad"] .v { color: var(--bad); }
+
+  /* --- reordenamiento: dos columnas + conectores --- */
+  .reorder { position: relative; }
+  .reorder .cols { display: grid; grid-template-columns: 1fr 96px 1fr; align-items: start; }
+  .colhead {
+    font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+    padding-bottom: 6px; border-bottom: 1px solid var(--grid); margin-bottom: 6px;
+  }
+  .colhead .hint { text-transform: none; letter-spacing: 0; color: var(--baseline); }
+  .rows { display: flex; flex-direction: column; gap: 4px; }
+  .card {
+    display: flex; align-items: center; gap: 8px;
+    height: 30px; padding: 0 9px;
+    border: 1px solid var(--border); border-left: 3px solid var(--relayer);
+    border-radius: 7px; background: var(--sunken);
+    font-size: 12px; white-space: nowrap; overflow: hidden;
+  }
+  .card[data-state="held"] { border-left-color: var(--held); }
+  .card[data-state="sent"] { border-left-color: var(--chain); }
+  .card[data-state="mined"] { border-left-color: var(--ok); }
+  .card[data-state="reverted"], .card[data-state="rejected"], .card[data-state="failed"] { border-left-color: var(--bad); }
+  .card.dim { opacity: 0.3; }
+  .card .ix { color: var(--muted); min-width: 20px; }
+  .card .who { color: var(--ink-2); }
+  .card .nonce { margin-left: auto; color: var(--ink); }
+  .card .nonce small { color: var(--muted); }
+  .card .chip { font-size: 11px; }
+  .chip[data-state="received"] { color: var(--muted); }
+  .chip[data-state="held"] { color: var(--held); }
+  .chip[data-state="sent"] { color: var(--chain); }
+  .chip[data-state="mined"] { color: var(--ok); }
+  .chip[data-state="reverted"], .chip[data-state="rejected"], .chip[data-state="failed"] { color: var(--bad); }
+  .links { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+  .links path { fill: none; stroke-width: 1.5; }
+
+  /* --- linea de tiempo --- */
+  .tl-wrap { overflow-x: auto; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-2); margin-bottom: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td.n { text-align: right; }
+
+  /* --- eventos --- */
+  .events { max-height: 260px; overflow-y: auto; font-size: 11.5px; }
+  .ev { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--grid); }
+  .ev time { color: var(--muted); }
+  .ev .name { min-width: 150px; color: var(--ink); }
+  .ev .body { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+  .ev[data-level="warn"] .name { color: var(--held); }
+  .ev[data-level="error"] .name { color: var(--bad); }
+
+  .empty { color: var(--muted); padding: 22px 4px; text-align: center; }
+  .empty code { background: var(--sunken); padding: 2px 6px; border-radius: 5px; color: var(--ink-2); }
+
+  #tip {
+    position: fixed; z-index: 10; pointer-events: none; display: none;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--baseline); border-radius: 8px;
+    padding: 7px 9px; font-size: 11.5px; white-space: pre-line;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); max-width: 340px;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>simple_relay</h1>
+  <span class="live" id="live" data-on="0"><span class="dot"></span><span id="liveText">conectando</span></span>
+  <span class="meta" id="meta"></span>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div class="controls">
+  <label class="meta" for="userFilter">usuario</label>
+  <select id="userFilter"><option value="">todos</option></select>
+  <button id="pause" aria-pressed="false">pausar</button>
+  <button id="clear">limpiar</button>
+  <div class="spacer"></div>
+  <button id="toggleTable" aria-pressed="false">ver tabla</button>
+</div>
+
+<section class="panel reorder">
+  <h2>Reordenamiento &mdash; llegada contra envio al hub</h2>
+  <div id="reorderEmpty" class="empty">
+    Sin metatx todavia. Para generar una rafaga: <code>npm run test:nonces -- --n 12</code>
+  </div>
+  <div class="cols hidden" id="reorderCols">
+    <div>
+      <div class="colhead">orden de llegada <span class="hint">&mdash; como entraron por HTTP</span></div>
+      <div class="rows" id="colArrival"></div>
+    </div>
+    <div></div>
+    <div>
+      <div class="colhead">orden de envio <span class="hint">&mdash; por nonce del hub</span></div>
+      <div class="rows" id="colSend"></div>
+    </div>
+  </div>
+  <svg class="links" id="links"></svg>
+</section>
+
+<section class="panel">
+  <h2>Linea de tiempo de cada metatx</h2>
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--relayer)"></i>en el relayer</span>
+    <span><i class="swatch" style="background:var(--held)"></i>retenida en el buffer</span>
+    <span><i class="swatch" style="background:var(--chain)"></i>en la cadena</span>
+    <span style="color:var(--ok)">&#10003; minada</span>
+    <span style="color:var(--bad)">&#10007; fallida</span>
+  </div>
+  <div class="tl-wrap"><svg id="timeline" role="img" aria-label="Linea de tiempo de las metatx"></svg></div>
+  <div id="tableWrap" class="hidden"></div>
+</section>
+
+<section class="panel">
+  <h2>Eventos</h2>
+  <div class="controls" style="margin-bottom:8px">
+    <input id="evFilter" placeholder="filtrar (relay.sent, 0x1234, BAD_NONCE...)" style="flex:1;min-width:180px">
+    <label class="meta"><input type="checkbox" id="onlyRelay" checked style="vertical-align:-1px"> solo relay.*</label>
+  </div>
+  <div class="events mono" id="events"></div>
+</section>
+
+<div id="tip"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- estado
+  var txs = new Map();      // metaTxId -> registro de la metatx
+  var arrival = [];         // ids en orden de llegada
+  var sent = [];            // ids en orden de envio al hub
+  var events = [];          // ultimas lineas de log crudas
+  var users = new Set();
+  var paused = false;
+  var lastSeq = 0;
+  var dirty = true;
+  var MAX_ROWS = 24;        // filas visibles en las columnas y la linea de tiempo
+  var MAX_EVENTS = 300;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var SVGNS = 'http://www.w3.org/2000/svg';
+
+  function short(addr) {
+    if (!addr) return '?';
+    return addr.length > 12 ? addr.slice(0, 6) + '\u2026' + addr.slice(-4) : addr;
+  }
+  function ms(v) {
+    if (v == null) return '';
+    return v < 1000 ? Math.round(v) + ' ms' : (v / 1000).toFixed(v < 10000 ? 2 : 1) + ' s';
+  }
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function svg(tag, attrs) {
+    var n = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  // Glifo + etiqueta por estado: el color nunca viaja solo.
+  var STATES = {
+    received: { icon: '\u25CB', label: 'recibida' },
+    held:     { icon: '\u23F8', label: 'en espera' },
+    sent:     { icon: '\u2192', label: 'en la cadena' },
+    mined:    { icon: '\u2713', label: 'minada' },
+    reverted: { icon: '\u2717', label: 'revirtio' },
+    rejected: { icon: '\u2717', label: 'rechazada' },
+    failed:   { icon: '\u2717', label: 'fallo' }
+  };
+
+  // ------------------------------------------------------- ingesta de eventos
+  function record(id) {
+    var tx = txs.get(id);
+    if (!tx) {
+      tx = { id: id, state: 'received', arrivalIx: arrival.length, sendIx: null };
+      txs.set(id, tx);
+      arrival.push(id);
+    }
+    return tx;
+  }
+
+  function ingest(e) {
+    if (e.seq > lastSeq) lastSeq = e.seq;
+
+    events.push(e);
+    if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+
+    var id = e.metaTxId;
+    if (!id) { dirty = true; return; }
+    var t = Date.parse(e.ts);
+    var tx = record(id);
+    tx.reqId = e.reqId || tx.reqId;
+
+    switch (e.event) {
+      case 'relay.received':
+        tx.receivedAt = t;
+        tx.rawTxBytes = e.rawTxBytes;
+        break;
+      case 'relay.decoded':
+        tx.from = e.from;
+        tx.to = e.to;
+        tx.nonce = Number(e.nonce);
+        tx.isDeploy = !!e.isDeploy;
+        tx.selector = e.selector;
+        tx.gasLimit = e.metaTxGasLimit;
+        if (e.from) users.add(e.from);
+        break;
+      case 'relay.held':
+        tx.heldAt = t;
+        tx.expected = Number(e.expected);
+        tx.gap = Number(e.gap);
+        if (tx.state === 'received') tx.state = 'held';
+        break;
+      case 'relay.turn':
+        tx.turnAt = t;
+        tx.heldMs = Number(e.heldMs);
+        tx.turnReason = e.reason;
+        break;
+      case 'relay.sent':
+        tx.sentAt = t;
+        tx.hash = e.transactionHash;
+        tx.hubNonce = Number(e.hubNonce);
+        tx.writerNonce = Number(e.writerNodeNonce);
+        tx.simulated = !!e.simulated;
+        tx.state = 'sent';
+        if (tx.sendIx == null) { tx.sendIx = sent.length; sent.push(id); }
+        break;
+      case 'relay.settled':
+        tx.settledAt = t;
+        tx.block = e.blockNumber;
+        tx.gasUsed = e.gasUsed;
+        tx.errorCodeName = e.errorCodeName;
+        tx.state = e.executed === false ? 'reverted' : 'mined';
+        break;
+      case 'relay.hub_rejected':
+        tx.state = 'rejected';
+        tx.errorCodeName = e.errorCodeName;
+        break;
+      case 'relay.rejected':
+        tx.state = 'rejected';
+        tx.error = e.error;
+        tx.code = e.code;
+        break;
+      case 'relay.settle_failed':
+        tx.state = 'failed';
+        tx.error = e.error;
+        tx.code = e.code;
+        break;
+    }
+    dirty = true;
+  }
+
+  // ------------------------------------------------------------------ filtro
+  function selectedUser() { return $('userFilter').value; }
+  function matches(tx) {
+    var u = selectedUser();
+    return !u || tx.from === u;
+  }
+  function visibleIds(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var tx = txs.get(list[i]);
+      if (tx && matches(tx)) out.push(list[i]);
+    }
+    return out.slice(-MAX_ROWS);
+  }
+
+  /**
+   * Que metatx salio en un lugar distinto del que llego. Se compara por usuario y solo entre las
+   * que efectivamente salieron: el orden es por cadena de nonces de un mismo 'from', y comparar
+   * indices globales marcaria como reordenada a cualquiera que tenga un rechazo en el medio.
+   */
+  function reorderedIds() {
+    var arrByUser = {};
+    var sntByUser = {};
+    var i;
+    for (i = 0; i < arrival.length; i++) {
+      var a = txs.get(arrival[i]);
+      if (!a || a.sendIx == null) continue;
+      var ku = a.from || '?';
+      (arrByUser[ku] = arrByUser[ku] || []).push(arrival[i]);
+    }
+    for (i = 0; i < sent.length; i++) {
+      var t = txs.get(sent[i]);
+      if (!t) continue;
+      var ks = t.from || '?';
+      (sntByUser[ks] = sntByUser[ks] || []).push(sent[i]);
+    }
+    var out = {};
+    for (var user in sntByUser) {
+      var snt = sntByUser[user];
+      var arr = arrByUser[user] || [];
+      for (var j = 0; j < snt.length; j++) if (arr[j] !== snt[j]) out[snt[j]] = true;
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------- resumen
+  function renderStats() {
+    var n = { total: 0, held: 0, inflight: 0, mined: 0, bad: 0, reordered: 0, heldMs: 0, heldN: 0 };
+    var moved = reorderedIds();
+    txs.forEach(function (tx) {
+      if (!matches(tx)) return;
+      n.total++;
+      if (tx.state === 'held') n.held++;
+      if (tx.state === 'sent') n.inflight++;
+      if (tx.state === 'mined') n.mined++;
+      if (tx.state === 'reverted' || tx.state === 'rejected' || tx.state === 'failed') n.bad++;
+      if (tx.heldAt != null) { n.heldN++; n.heldMs += tx.heldMs || 0; }
+      if (moved[tx.id]) n.reordered++;
+    });
+
+    var tiles = [
+      { k: 'metatx', v: n.total, tone: '' },
+      { k: 'en espera', v: n.held, tone: 'held' },
+      { k: 'en la cadena', v: n.inflight, tone: 'chain' },
+      { k: 'minadas', v: n.mined, tone: 'ok' },
+      { k: 'fallidas', v: n.bad, tone: 'bad' },
+      { k: 'reordenadas', v: n.reordered, tone: '' },
+      { k: 'espera media', v: n.heldN ? ms(n.heldMs / n.heldN) : '\u2013', tone: '' }
+    ];
+
+    var host = $('stats');
+    host.textContent = '';
+    tiles.forEach(function (t) {
+      var box = el('div', 'stat');
+      if (t.tone) box.setAttribute('data-tone', t.tone);
+      box.appendChild(el('div', 'k', t.k));
+      var v = el('div', 'v num');
+      v.textContent = String(t.v);
+      box.appendChild(v);
+      host.appendChild(box);
+    });
+  }
+
+  // --------------------------------------------- columnas de reordenamiento
+  function tipText(tx) {
+    var st = STATES[tx.state] || STATES.received;
+    var lines = [
+      st.icon + ' ' + st.label + '  \u00b7  metatx ' + tx.id,
+      'usuario  ' + (tx.from || '?'),
+      'nonce del hub  ' + (tx.nonce != null ? tx.nonce : '?'),
+      'llegada #' + (tx.arrivalIx + 1) + (tx.sendIx != null ? '   envio #' + (tx.sendIx + 1) : '   sin enviar')
+    ];
+    if (tx.heldAt != null) lines.push('retenida  ' + ms(tx.heldMs) + (tx.gap ? '  (llego ' + tx.gap + ' nonce(s) adelantada)' : ''));
+    if (tx.turnReason && tx.turnReason !== 'in_turn') lines.push('salio del buffer por  ' + tx.turnReason);
+    if (tx.writerNonce != null) lines.push('nonce del writer node  ' + tx.writerNonce);
+    if (tx.hash) lines.push('tx  ' + tx.hash);
+    if (tx.block != null) lines.push('bloque  ' + tx.block + '   gas  ' + (tx.gasUsed || '?'));
+    if (tx.selector) lines.push('selector  ' + tx.selector);
+    if (tx.errorCodeName) lines.push('hub  ' + tx.errorCodeName);
+    if (tx.error) lines.push((tx.code ? tx.code + ': ' : '') + tx.error);
+    return lines.join('\n');
+  }
+
+  function cardFor(tx, index, side) {
+    var st = STATES[tx.state] || STATES.received;
+    var card = el('div', 'card');
+    card.setAttribute('data-state', tx.state);
+    card.setAttribute('data-id', tx.id);
+    card.setAttribute('data-side', side);
+    card.dataset.tip = tipText(tx);
+
+    card.appendChild(el('span', 'ix num', '#' + (index + 1)));
+    var chip = el('span', 'chip', st.icon + ' ' + st.label);
+    chip.setAttribute('data-state', tx.state);
+    card.appendChild(chip);
+    card.appendChild(el('span', 'who mono', short(tx.from)));
+
+    var nonce = el('span', 'nonce num mono');
+    nonce.appendChild(el('small', null, 'nonce '));
+    nonce.appendChild(document.createTextNode(tx.nonce != null ? String(tx.nonce) : '?'));
+    card.appendChild(nonce);
+    return card;
+  }
+
+  function renderReorder() {
+    var moved = reorderedIds();
+    var arr = visibleIds(arrival);
+    $('reorderEmpty').classList.toggle('hidden', arr.length > 0);
+    $('reorderCols').classList.toggle('hidden', arr.length === 0);
+
+    var left = $('colArrival');
+    var right = $('colSend');
+    left.textContent = '';
+    right.textContent = '';
+    if (arr.length === 0) { $('links').textContent = ''; return; }
+
+    arr.forEach(function (id) {
+      left.appendChild(cardFor(txs.get(id), txs.get(id).arrivalIx, 'l'));
+    });
+
+    // A la derecha solo lo que efectivamente salio, en el orden en que salio: es la lista que
+    // el hub vio, y comparada con la izquierda muestra que hizo el buffer de reordenamiento.
+    var shown = {};
+    arr.forEach(function (id) { shown[id] = true; });
+    var rightIds = [];
+    for (var i = 0; i < sent.length; i++) if (shown[sent[i]]) rightIds.push(sent[i]);
+    rightIds.forEach(function (id) {
+      right.appendChild(cardFor(txs.get(id), txs.get(id).sendIx, 'r'));
+    });
+
+    drawLinks(left, right, moved);
+  }
+
+  /** Curvas entre la misma metatx de un lado y del otro. Si se cruzan, hubo reordenamiento. */
+  function drawLinks(left, right, moved) {
+    var host = $('links');
+    host.textContent = '';
+    var box = host.getBoundingClientRect();
+    if (box.width === 0) return;
+
+    var byId = {};
+    var rs = right.querySelectorAll('.card');
+    for (var i = 0; i < rs.length; i++) byId[rs[i].getAttribute('data-id')] = rs[i];
+
+    var ls = left.querySelectorAll('.card');
+    for (var j = 0; j < ls.length; j++) {
+      var a = ls[j];
+      var b = byId[a.getAttribute('data-id')];
+      if (!b) continue;
+      var tx = txs.get(a.getAttribute('data-id'));
+      if (!tx) continue;
+      var ra = a.getBoundingClientRect();
+      var rb = b.getBoundingClientRect();
+      var x1 = ra.right - box.left;
+      var y1 = ra.top + ra.height / 2 - box.top;
+      var x2 = rb.left - box.left;
+      var y2 = rb.top + rb.height / 2 - box.top;
+      var dx = Math.max(24, (x2 - x1) / 2);
+      var crossed = !!moved[tx.id];
+      var path = svg('path', {
+        d: 'M' + x1 + ',' + y1 + ' C' + (x1 + dx) + ',' + y1 + ' ' + (x2 - dx) + ',' + y2 + ' ' + x2 + ',' + y2,
+        stroke: crossed ? 'var(--held)' : 'var(--baseline)',
+        'stroke-opacity': crossed ? '0.9' : '0.45'
+      });
+      host.appendChild(path);
+    }
+  }
+
+  // ------------------------------------------------------- linea de tiempo
+  var ROW_H = 22;
+  var PAD_L = 154;
+  var PAD_R = 16;
+  var PAD_T = 22;
+
+  function renderTimeline() {
+    var ids = visibleIds(arrival);
+    var host = $('timeline');
+    host.textContent = '';
+    if (ids.length === 0) { host.setAttribute('height', '0'); return; }
+
+    var width = Math.max(520, host.parentNode.clientWidth || 640);
+    var height = PAD_T + ids.length * ROW_H + 24;
+    host.setAttribute('width', width);
+    host.setAttribute('height', height);
+    host.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+
+    var t0 = Infinity;
+    var t1 = -Infinity;
+    ids.forEach(function (id) {
+      var tx = txs.get(id);
+      if (tx.receivedAt) t0 = Math.min(t0, tx.receivedAt);
+      [tx.receivedAt, tx.heldAt, tx.turnAt, tx.sentAt, tx.settledAt].forEach(function (t) {
+        if (t) t1 = Math.max(t1, t);
+      });
+    });
+    if (!isFinite(t0)) return;
+    // Las que siguen en vuelo se dibujan hasta ahora: la barra crece sola mientras se espera.
+    var anyOpen = ids.some(function (id) {
+      var s = txs.get(id).state;
+      return s === 'received' || s === 'held' || s === 'sent';
+    });
+    if (anyOpen) t1 = Math.max(t1, Date.now());
+    var span = Math.max(300, t1 - t0);
+    var plot = width - PAD_L - PAD_R;
+    var x = function (t) { return PAD_L + ((t - t0) / span) * plot; };
+
+    // Eje: cuatro marcas y una rejilla de pelo, por detras de las barras.
+    for (var k = 0; k <= 4; k++) {
+      var t = t0 + (span * k) / 4;
+      var gx = x(t);
+      host.appendChild(svg('line', { x1: gx, y1: PAD_T - 8, x2: gx, y2: PAD_T + ids.length * ROW_H, stroke: 'var(--grid)', 'stroke-width': 1 }));
+      var lab = svg('text', { x: gx, y: PAD_T - 12, fill: 'var(--muted)', 'font-size': 10, 'text-anchor': k === 0 ? 'start' : (k === 4 ? 'end' : 'middle') });
+      lab.textContent = '+' + ms(t - t0);
+      host.appendChild(lab);
+    }
+
+    ids.forEach(function (id, row) {
+      var tx = txs.get(id);
+      var y = PAD_T + row * ROW_H;
+      var h = 11;
+      var yb = y + (ROW_H - h) / 2;
+      var end = tx.settledAt || (tx.state === 'rejected' || tx.state === 'failed' ? (tx.sentAt || tx.receivedAt) : Date.now());
+
+      var label = svg('text', { x: PAD_L - 10, y: y + ROW_H / 2 + 3.5, fill: 'var(--ink-2)', 'font-size': 11, 'text-anchor': 'end' });
+      label.textContent = '#' + (tx.arrivalIx + 1) + '  ' + short(tx.from) + '  n' + (tx.nonce != null ? tx.nonce : '?');
+      host.appendChild(label);
+
+      // Tramos, en orden real: relayer -> buffer -> relayer -> cadena. 2px de aire entre fills.
+      var segs = [];
+      var holdStart = tx.heldAt || null;
+      var holdEnd = tx.turnAt || (holdStart ? end : null);
+      var sendAt = tx.sentAt || null;
+      if (tx.receivedAt) segs.push([tx.receivedAt, holdStart || sendAt || end, 'var(--relayer)']);
+      if (holdStart) segs.push([holdStart, holdEnd, 'var(--held)']);
+      if (holdEnd && sendAt) segs.push([holdEnd, sendAt, 'var(--relayer)']);
+      if (sendAt) segs.push([sendAt, end, 'var(--chain)']);
+
+      // El final visible no es 'end': una rechazada despues de esperar sigue teniendo la barra
+      // ambar hasta que se le vencio la ventana, y la marca tiene que ir ahi y no encima.
+      var barEnd = x(tx.receivedAt || t0);
+      segs.forEach(function (s) {
+        var x1 = x(s[0]);
+        var x2 = Math.max(x1 + 1, x(s[1]) - 2);
+        barEnd = Math.max(barEnd, x2);
+        host.appendChild(svg('rect', { x: x1, y: yb, width: x2 - x1, height: h, rx: 2, fill: s[2] }));
+      });
+
+      if (tx.state === 'mined' || tx.state === 'reverted' || tx.state === 'rejected' || tx.state === 'failed') {
+        var okTx = tx.state === 'mined';
+        var mark = svg('text', {
+          x: barEnd + 6, y: y + ROW_H / 2 + 4,
+          fill: okTx ? 'var(--ok)' : 'var(--bad)', 'font-size': 11
+        });
+        mark.textContent = okTx ? '\u2713' : '\u2717 ' + (tx.errorCodeName || tx.code || 'revirtio');
+        host.appendChild(mark);
+      }
+
+      var hit = svg('rect', { x: PAD_L, y: y, width: plot, height: ROW_H, fill: 'transparent' });
+      hit.dataset.tip = tipText(tx);
+      host.appendChild(hit);
+    });
+  }
+
+  // ------------------------------------------------- tabla (vista accesible)
+  function renderTable() {
+    var host = $('tableWrap');
+    if (host.classList.contains('hidden')) return;
+    host.textContent = '';
+    var cols = ['#', 'envio', 'estado', 'usuario', 'nonce hub', 'nonce writer', 'espera', 'en cadena', 'tx'];
+    var table = el('table');
+    var thead = el('thead');
+    var tr = el('tr');
+    cols.forEach(function (c, i) { tr.appendChild(el('th', i >= 4 && i <= 7 ? 'n' : null, c)); });
+    thead.appendChild(tr);
+    table.appendChild(thead);
+
+    var tbody = el('tbody');
+    visibleIds(arrival).forEach(function (id) {
+      var tx = txs.get(id);
+      var st = STATES[tx.state] || STATES.received;
+      var row = el('tr');
+      var chain = tx.sentAt && tx.settledAt ? ms(tx.settledAt - tx.sentAt) : '';
+      [
+        '#' + (tx.arrivalIx + 1),
+        tx.sendIx != null ? '#' + (tx.sendIx + 1) : '\u2013',
+        st.icon + ' ' + st.label + detail(tx),
+        short(tx.from),
+        tx.nonce != null ? String(tx.nonce) : '',
+        tx.writerNonce != null ? String(tx.writerNonce) : '',
+        tx.heldAt != null ? ms(tx.heldMs) : '',
+        chain,
+        tx.hash ? short(tx.hash) : ''
+      ].forEach(function (v, i) {
+        var td = el('td', i >= 4 && i <= 7 ? 'n num' : null, v);
+        row.appendChild(td);
+      });
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    host.appendChild(table);
+  }
+
+  /** El codigo del hub solo aporta cuando no es OK; repetirlo en cada fila minada es ruido. */
+  function detail(tx) {
+    if (tx.errorCodeName && tx.errorCodeName !== 'OK') return ' (' + tx.errorCodeName + ')';
+    if (tx.code) return ' (' + tx.code + ')';
+    return '';
+  }
+
+  // ---------------------------------------------------------------- eventos
+  function renderEvents() {
+    var host = $('events');
+    var atBottom = host.scrollTop + host.clientHeight >= host.scrollHeight - 24;
+    var needle = $('evFilter').value.trim().toLowerCase();
+    var onlyRelay = $('onlyRelay').checked;
+    var user = selectedUser();
+
+    host.textContent = '';
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i];
+      if (onlyRelay && e.event.indexOf('relay.') !== 0) continue;
+      if (user && e.from && e.from !== user) continue;
+      var body = summarize(e);
+      if (needle && (e.event + ' ' + body).toLowerCase().indexOf(needle) === -1) continue;
+
+      var line = el('div', 'ev');
+      line.setAttribute('data-level', e.level);
+      line.appendChild(el('time', null, e.ts.slice(11, 23)));
+      line.appendChild(el('span', 'name', e.event));
+      line.appendChild(el('span', 'body', body));
+      host.appendChild(line);
+    }
+    if (atBottom) host.scrollTop = host.scrollHeight;
+  }
+
+  var SKIP = { ts: 1, level: 1, event: 1, seq: 1, instanceId: 1, rawTx: 1, innerData: 1, output: 1, stack: 1 };
+  function summarize(e) {
+    var parts = [];
+    for (var k in e) {
+      if (SKIP[k]) continue;
+      var v = e[k];
+      if (v == null || v === '') continue;
+      if (typeof v === 'object') v = JSON.stringify(v);
+      if (String(v).length > 60) v = String(v).slice(0, 60) + '\u2026';
+      parts.push(k + '=' + v);
+    }
+    return parts.join('  ');
+  }
+
+  // ------------------------------------------------------------- orquestacion
+  function renderUsers() {
+    var sel = $('userFilter');
+    var have = {};
+    for (var i = 0; i < sel.options.length; i++) have[sel.options[i].value] = true;
+    users.forEach(function (u) {
+      if (have[u]) return;
+      var opt = document.createElement('option');
+      opt.value = u;
+      opt.textContent = short(u);
+      sel.appendChild(opt);
+    });
+  }
+
+  function render() {
+    renderUsers();
+    renderStats();
+    renderReorder();
+    renderTimeline();
+    renderTable();
+    renderEvents();
+  }
+
+  // Una sola pasada por frame: una rafaga de 20 metatx entra en decenas de eventos seguidos y
+  // no tiene sentido redibujar por cada uno. El tick tambien hace crecer las barras abiertas.
+  function frame() {
+    var open = false;
+    txs.forEach(function (tx) {
+      if (tx.state === 'received' || tx.state === 'held' || tx.state === 'sent') open = true;
+    });
+    if (!paused && (dirty || open)) { dirty = false; render(); }
+    setTimeout(function () { requestAnimationFrame(frame); }, 250);
+  }
+
+  // ------------------------------------------------------------------ stream
+  function connect() {
+    var src = new EventSource('/dashboard/stream?after=' + lastSeq);
+    src.onopen = function () {
+      $('live').setAttribute('data-on', '1');
+      $('liveText').textContent = 'en vivo';
+    };
+    src.onmessage = function (msg) {
+      var data;
+      try { data = JSON.parse(msg.data); } catch (err) { return; }
+      if (data.event === 'dashboard.hello') {
+        $('meta').innerHTML = '';
+        var m = $('meta');
+        m.appendChild(document.createTextNode('instancia '));
+        var b = el('b', 'mono', data.instanceId);
+        m.appendChild(b);
+        if (data.pid) m.appendChild(document.createTextNode('  \u00b7  pid ' + data.pid));
+        return;
+      }
+      ingest(data);
+    };
+    src.onerror = function () {
+      $('live').setAttribute('data-on', '0');
+      $('liveText').textContent = 'reconectando';
+      // EventSource reintenta solo; el ?after= del proximo intento sale del lastSeq ya visto.
+      src.close();
+      setTimeout(connect, 1500);
+    };
+  }
+
+  // Datos del relayer para la cabecera. Si el nodo no responde, la pagina sigue sirviendo.
+  fetch('/info').then(function (r) { return r.json(); }).then(function (info) {
+    var m = $('meta');
+    var txt = document.createElement('span');
+    txt.innerHTML = '';
+    m.appendChild(document.createTextNode('  \u00b7  chain ' + info.chainId + '  \u00b7  hub '));
+    m.appendChild(el('b', 'mono', short(info.relayHubAddress)));
+    m.appendChild(document.createTextNode('  \u00b7  writer '));
+    m.appendChild(el('b', 'mono', short(info.nodeAddress)));
+    if (info.reorderWindowMs != null) {
+      m.appendChild(document.createTextNode('  \u00b7  ventana de reorden ' + ms(info.reorderWindowMs)));
+    }
+    m.appendChild(document.createTextNode('  \u00b7  max en vuelo ' + info.maxInflightPerUser));
+  }).catch(function () { /* la cabecera es informativa: sin /info el monitor igual sirve */ });
+
+  // ------------------------------------------------------------------- UI
+  $('pause').addEventListener('click', function () {
+    paused = !paused;
+    this.setAttribute('aria-pressed', String(paused));
+    this.textContent = paused ? 'reanudar' : 'pausar';
+    if (!paused) dirty = true;
+  });
+  $('clear').addEventListener('click', function () {
+    txs = new Map(); arrival = []; sent = []; events = []; dirty = true;
+  });
+  $('toggleTable').addEventListener('click', function () {
+    var on = $('tableWrap').classList.toggle('hidden');
+    this.setAttribute('aria-pressed', String(!on));
+    this.textContent = on ? 'ver tabla' : 'ocultar tabla';
+    dirty = true;
+  });
+  $('userFilter').addEventListener('change', function () { dirty = true; });
+  $('evFilter').addEventListener('input', function () { dirty = true; });
+  $('onlyRelay').addEventListener('change', function () { dirty = true; });
+  window.addEventListener('resize', function () { dirty = true; });
+
+  var tip = $('tip');
+  document.addEventListener('mousemove', function (ev) {
+    var target = ev.target.closest ? ev.target.closest('[data-tip]') : null;
+    if (!target && ev.target.dataset && ev.target.dataset.tip) target = ev.target;
+    if (!target) { tip.style.display = 'none'; return; }
+    tip.textContent = target.dataset.tip;
+    tip.style.display = 'block';
+    var w = tip.offsetWidth;
+    var h = tip.offsetHeight;
+    var x = ev.clientX + 14;
+    var y = ev.clientY + 14;
+    if (x + w > window.innerWidth - 8) x = ev.clientX - w - 14;
+    if (y + h > window.innerHeight - 8) y = ev.clientY - h - 14;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  });
+
+  connect();
+  frame();
+})();
+</script>
+</body>
+</html>

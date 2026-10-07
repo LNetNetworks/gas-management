@@ -1,12 +1,12 @@
 module github.com/LACNetNetworks/gas-relay-signer
 
-go 1.19
+go 1.23.0
 
 require (
 	github.com/ethereum/go-ethereum v1.9.15
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/viper v1.13.0
-	golang.org/x/crypto v0.1.0
+	golang.org/x/crypto v0.36.0
 )
 
 require (
@@ -54,9 +54,9 @@ require (
 	github.com/tklauser/numcpus v0.2.2 // indirect
 	github.com/tyler-smith/go-bip39 v1.0.1-0.20181017060643-dbb3b84ba2ef // indirect
 	github.com/wsddn/go-ecdh v0.0.0-20161211032359-48726bab9208 // indirect
-	golang.org/x/net v0.1.0 // indirect
-	golang.org/x/sys v0.1.0 // indirect
-	golang.org/x/text v0.4.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
